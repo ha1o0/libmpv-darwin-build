@@ -1,10 +1,10 @@
 final: prev: {
   darwin = prev.darwin.overrideScope (
     final: prev: {
-      xcode_16_1 = prev.xcode.overrideAttrs (prev: {
-        outputHash = "sha256-1jyRJVyOmGA7fxRwBnxSJatnOFDu01RJ9aAQXJNuWBw=";
+      xcode_16_2 = prev.xcode.overrideAttrs (prev: {
+        outputHash = "sha256-XWTzMAonhhbQYkjg2XRQ5hcMMKZTkKN9f8dvDMraz9A=";
       });
-      xcode = final.xcode_16_1;
+      xcode = final.xcode_16_2;
     }
   );
 }
