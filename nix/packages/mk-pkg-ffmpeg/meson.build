@@ -101,7 +101,17 @@ audio_default_options = [
     '--enable-decoder=dsd*',
     '--enable-decoder=dca', # required by dts
 
-    # parsers   
+    '--enable-decoder=rv10',
+    '--enable-decoder=rv20',
+    '--enable-decoder=rv30',
+    '--enable-decoder=rv40',
+    '--enable-decoder=cook',
+    '--enable-decoder=atrac3',
+    '--enable-decoder=sipr',
+    '--enable-decoder=ra_144',
+    '--enable-decoder=ra_288',
+
+    # parsers
     '--enable-parser=aac*',
     '--enable-parser=ac3',
     '--enable-parser=cook',
