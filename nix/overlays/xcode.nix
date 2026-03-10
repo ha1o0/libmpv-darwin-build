@@ -58,13 +58,13 @@ final: prev: {
         };
     in
     {
-      xcode_16_1 = requireXcode "16.1" "sha256-yYg6NRRnYM/5X3hhVMfcXcdoiOV36fIongJNQ5nviD8=";
+      xcode_16_2 = requireXcode "16.2" "sha256-XWTzMAonhhbQYkjg2XRQ5hcMMKZTkKN9f8dvDMraz9A=";
 
       xcode =
         let
           xcodePath = prev.lib.trim (builtins.readFile ../../.nix/config/xcode.path);
         in
-        if xcodePath != "" then xcodePath else self.xcode_16_1;
+        if xcodePath != "" then xcodePath else self.xcode_16_2;
     }
   );
 }
