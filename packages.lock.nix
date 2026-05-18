@@ -76,8 +76,8 @@
   };
   mpv = {
     version = "0.36.0";
-    url = "https://github.com/mpv-player/mpv/archive/refs/tags/v0.36.0.tar.gz";
-    sha256 = "29abc44f8ebee013bb2f9fe14d80b30db19b534c679056e4851ceadf5a5e8bf6";
+    url = "https://github.com/ha1o0/mpv/archive/refs/heads/my-gpu-next.tar.gz";
+    sha256 = "8ff7f966c928a017936588691c5f7e3ec9f44f13d9e0ad6e4b8c9f8a647e7d19";
   };
   uchardet = {
     version = "0.0.8";
