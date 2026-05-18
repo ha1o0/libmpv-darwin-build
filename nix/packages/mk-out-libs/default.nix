@@ -23,6 +23,14 @@ let
       ;
   };
   pname = import ../../utils/name/output.nix name;
+  targetPkgs =
+    if arch == "amd64" then
+      import pkgs.path {
+        system = "x86_64-darwin";
+        config.allowUnfree = true;
+      }
+    else
+      pkgs;
 in
 
 let
@@ -71,6 +79,13 @@ if arch != archs.universal then
         fribidi
         freetype
         libpng
+      ]
+      ++ pkgs.lib.optionals (os == "macos" && variant == "video") [
+        targetPkgs.libplacebo
+        targetPkgs.shaderc.lib
+        targetPkgs.vulkan-loader
+        targetPkgs.lcms2
+        targetPkgs.libdovi
       ]
       ++ pkgs.lib.optionals (variant == variants.video && flavor == flavors.encodersgpl) [
         libvpx
