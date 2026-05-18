@@ -5,9 +5,9 @@
     sha256 = "a4003623cdc0109dec3aac8435520aa3fb12c4d69454fa227f2658cdb6dab5fa";
   };
   ffmpeg = {
-    version = "6.0";
-    url = "https://ffmpeg.org/releases/ffmpeg-6.0.tar.xz";
-    sha256 = "57be87c22d9b49c112b6d24bc67d42508660e6b718b3db89c44e47e289137082";
+    version = "6.1.5";
+    url = "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n6.1.5.tar.gz";
+    sha256 = "4bdedf0bfc705c99f515391054cd4df8723494c66016c33e0009419da5231e63";
   };
   fftools-ffi = {
     version = "9b0d4da0";

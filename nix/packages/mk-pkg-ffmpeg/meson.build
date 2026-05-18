@@ -337,6 +337,10 @@ elif flavor == 'encodersgpl'
     endif
 endif
 
+# VideoToolbox scaling filter (scale_vt) requires iOS 16.0+, which breaks builds
+# targeting lower iOS versions (e.g. iOS 9.0). We do not use it in media-kit.
+options += ['--disable-filter=scale_vt']
+
 p = mod.add_project('configure',
     configure_options : options,
     cross_configure_options: [
