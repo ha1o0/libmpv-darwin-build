@@ -72,6 +72,13 @@ if arch != archs.universal then
         freetype
         libpng
       ]
+      ++ pkgs.lib.optionals (os == "macos" && variant == "video") [
+        pkgs.libplacebo
+        pkgs.shaderc.lib
+        pkgs.vulkan-loader
+        pkgs.lcms2
+        pkgs.libdovi
+      ]
       ++ pkgs.lib.optionals (variant == variants.video && flavor == flavors.encodersgpl) [
         libvpx
         libx264
