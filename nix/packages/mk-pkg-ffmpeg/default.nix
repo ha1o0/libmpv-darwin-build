@@ -43,9 +43,13 @@ let
 
     cd $src
     patch -p1 <${../../../patches/ffmpeg-fix-vp9-hwaccel.patch}
-    patch -p1 <${../../../patches/ffmpeg-fix-hls-mp4-seek.patch}
+    # patch -p1 <${../../../patches/ffmpeg-fix-hls-mp4-seek.patch}
     patch -p1 <${../../../patches/ffmpeg-fix-ios-hdr-texture.patch}
     patch -p1 <${../../../patches/ffmpeg-fix-dash-base-url-escape.patch}
+
+    # Disable Wunguarded-availability-new warning as error in videotoolboxenc.c to support iOS deployment target of 9.0
+    sed -i '1i #pragma clang diagnostic ignored "-Wunguarded-availability-new"' libavcodec/videotoolboxenc.c
+
     cd -
 
     cp ${./meson.build} $src/meson.build

@@ -1,14 +1,13 @@
 diff --git a/meson.build b/meson.build
-index f9fe4e7..a3d55c4 100644
+index 56f92e5..74e1af1 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -23,13 +23,11 @@ libavutil = dependency('libavutil', version: '>= 56.70.100')
- libswresample = dependency('libswresample', version: '>= 3.9.100')
- libswscale = dependency('libswscale', version: '>= 5.9.100')
+@@ -30,12 +30,9 @@ libswscale = dependency('libswscale', version: '>= 7.5.100')
+ libplacebo = dependency('libplacebo', version: '>=7.360.1',
+                 default_options: ['default_library=static', 'demos=false'])
  
 -libass = dependency('libass', version: '>= 0.12.2')
- pthreads = dependency('threads')
- 
+-
 -# the dependency order of libass -> ffmpeg is necessary due to
 +# the dependency order of libavcodec -> ffmpeg is necessary due to
  # static linking symbol resolution between fontconfig and MinGW
@@ -18,29 +17,29 @@ index f9fe4e7..a3d55c4 100644
                  libavfilter,
                  libavformat,
                  libavutil,
-@@ -44,7 +42,7 @@ features = {
+@@ -48,7 +45,7 @@ features = {
+     'debug': get_option('debug'),
+     'ffmpeg': true,
      'gpl': get_option('gpl'),
-     'jpegxl': libavformat.version().version_compare('>= 59.27.100'),
-     'avif_muxer': libavformat.version().version_compare('>= 59.24.100'),
 -    'libass': true,
 +    'libass': false,
-     'threads': true,
+     'libplacebo': true,
  }
  
 diff --git a/player/command.c b/player/command.c
-index 0eb13a7..f7a17c8 100644
+index 7578cbe..87359b3 100644
 --- a/player/command.c
 +++ b/player/command.c
 @@ -27,7 +27,7 @@
- #include <pthread.h>
- #include <sys/types.h>
+ 
+ #include "config.h" // for HAVE_SUBRANDR
  
 -#include <ass/ass.h>
 +// #include <ass/ass.h>
- #include <libavutil/avstring.h>
- #include <libavutil/common.h>
- 
-@@ -3310,7 +3310,8 @@ static int mp_property_ffmpeg(void *ctx, struct m_property *prop,
+ #if HAVE_SUBRANDR
+ #include <subrandr/subrandr.h>
+ #endif
+@@ -3926,7 +3926,8 @@ static int mp_property_ffmpeg(void *ctx, struct m_property *prop,
  static int mp_property_libass_version(void *ctx, struct m_property *prop,
                                        int action, void *arg)
  {
@@ -49,7 +48,7 @@ index 0eb13a7..f7a17c8 100644
 +    return m_property_int64_ro(action, arg, 0);
  }
  
- static int mp_property_platform(void *ctx, struct m_property *prop,
+ static int mp_property_libplacebo_version(void *ctx, struct m_property *prop,
 diff --git a/sub/ass.h b/sub/ass.h
 new file mode 100644
 index 0000000..05d97fb
@@ -869,10 +868,10 @@ index 0000000..05d97fb
 +
 +#endif /* LIBASS_ASS_H */
 diff --git a/sub/ass_mp.c b/sub/ass_mp.c
-index 634681f..ddd945d 100644
+index b8e9e5a..45756c5 100644
 --- a/sub/ass_mp.c
 +++ b/sub/ass_mp.c
-@@ -25,8 +25,8 @@
+@@ -24,8 +24,8 @@
  #include <assert.h>
  #include <math.h>
  
@@ -882,13 +881,13 @@ index 634681f..ddd945d 100644
 +// #include <ass/ass_types.h>
  
  #include "common/common.h"
- #include "common/global.h"
+ #include "common/msg.h"
 diff --git a/sub/ass_mp.h b/sub/ass_mp.h
-index 3dd2bf6..77597ec 100644
+index ecc4423..087dabe 100644
 --- a/sub/ass_mp.h
 +++ b/sub/ass_mp.h
-@@ -23,8 +23,10 @@
- #include <stdint.h>
+@@ -22,8 +22,10 @@
+ 
  #include <stdbool.h>
  
 -#include <ass/ass.h>
@@ -898,8 +897,8 @@ index 3dd2bf6..77597ec 100644
 +#include "ass.h"
 +#include "ass_types.h"
  
- // This is probably arbitrary.
- // sd_lavc_conv might indirectly still assume this PlayResY, though.
+ // These PlayResX and PlayResY values are arbitrary and taken from lavc.
+ // lavc assumes these values when converting to ass generally. Moreover, these
 diff --git a/sub/ass_types.h b/sub/ass_types.h
 new file mode 100644
 index 0000000..e4cc222
@@ -1199,10 +1198,10 @@ index 0000000..e4cc222
 +
 +#endif /* LIBASS_TYPES_H */
 diff --git a/sub/osd_libass.c b/sub/osd_libass.c
-index 1687f14..23df4cc 100644
+index 7b08509..67a1f6e 100644
 --- a/sub/osd_libass.c
 +++ b/sub/osd_libass.c
-@@ -47,21 +47,21 @@ void osd_init_backend(struct osd_state *osd)
+@@ -44,21 +44,21 @@ static void append_ass(struct ass_state *ass, struct mp_osd_res *res,
  
  static void create_ass_renderer(struct osd_state *osd, struct ass_state *ass)
  {
@@ -1237,7 +1236,7 @@ index 1687f14..23df4cc 100644
  
  static void destroy_ass_renderer(struct ass_state *ass)
 diff --git a/sub/sd_ass.c b/sub/sd_ass.c
-index e4e5652..0e55f7f 100644
+index d415106..a33d119 100644
 --- a/sub/sd_ass.c
 +++ b/sub/sd_ass.c
 @@ -22,7 +22,7 @@
@@ -1249,42 +1248,30 @@ index e4e5652..0e55f7f 100644
  
  #include "mpv_talloc.h"
  
-@@ -205,41 +205,41 @@ static void enable_output(struct sd *sd, bool enable)
+@@ -248,47 +248,47 @@ static void enable_output(struct sd *sd, bool enable)
  
  static void assobjects_init(struct sd *sd)
  {
 -    struct sd_ass_priv *ctx = sd->priv;
 -    struct mp_subtitle_opts *opts = sd->opts;
-+//     struct sd_ass_priv *ctx = sd->priv;
-+//     struct mp_subtitle_opts *opts = sd->opts;
- 
+-    struct mp_subtitle_shared_opts *shared_opts = sd->shared_opts;
+-
 -    ctx->ass_library = mp_ass_init(sd->global, sd->opts->sub_style, sd->log);
 -    ass_set_extract_fonts(ctx->ass_library, opts->use_embedded_fonts);
-+//     ctx->ass_library = mp_ass_init(sd->global, sd->opts->sub_style, sd->log);
-+//     ass_set_extract_fonts(ctx->ass_library, opts->use_embedded_fonts);
- 
+-
 -    add_subtitle_fonts(sd);
-+//     add_subtitle_fonts(sd);
- 
--    if (opts->ass_style_override)
--        ass_set_style_overrides(ctx->ass_library, opts->ass_force_style_list);
-+//     if (opts->ass_style_override)
-+//         ass_set_style_overrides(ctx->ass_library, opts->ass_force_style_list);
- 
+-
+-    if (shared_opts->ass_style_override[sd->order])
+-        ass_set_style_overrides(ctx->ass_library, opts->ass_style_override_list);
+-
 -    ctx->ass_track = ass_new_track(ctx->ass_library);
 -    ctx->ass_track->track_type = TRACK_TYPE_ASS;
-+//     ctx->ass_track = ass_new_track(ctx->ass_library);
-+//     ctx->ass_track->track_type = TRACK_TYPE_ASS;
- 
+-
 -    ctx->shadow_track = ass_new_track(ctx->ass_library);
--    ctx->shadow_track->PlayResX = 384;
--    ctx->shadow_track->PlayResY = 288;
--    mp_ass_add_default_styles(ctx->shadow_track, opts);
-+//     ctx->shadow_track = ass_new_track(ctx->ass_library);
-+//     ctx->shadow_track->PlayResX = 384;
-+//     ctx->shadow_track->PlayResY = 288;
-+//     mp_ass_add_default_styles(ctx->shadow_track, opts);
- 
+-    ctx->shadow_track->PlayResX = MP_ASS_FONT_PLAYRESX;
+-    ctx->shadow_track->PlayResY = MP_ASS_FONT_PLAYRESY;
+-    mp_ass_add_default_styles(sd, ctx->shadow_track, opts, shared_opts);
+-
 -    char *extradata = sd->codec->extradata;
 -    int extradata_size = sd->codec->extradata_size;
 -    if (ctx->converter) {
@@ -1293,27 +1280,60 @@ index e4e5652..0e55f7f 100644
 -    }
 -    if (extradata)
 -        ass_process_codec_private(ctx->ass_track, extradata, extradata_size);
-+//     char *extradata = sd->codec->extradata;
-+//     int extradata_size = sd->codec->extradata_size;
-+//     if (ctx->converter) {
-+//         extradata = lavc_conv_get_extradata(ctx->converter);
-+//         extradata_size = extradata ? strlen(extradata) : 0;
-+//     }
-+//     if (extradata)
-+//         ass_process_codec_private(ctx->ass_track, extradata, extradata_size);
- 
--    mp_ass_add_default_styles(ctx->ass_track, opts);
-+//     mp_ass_add_default_styles(ctx->ass_track, opts);
- 
+-
+-    mp_ass_add_default_styles(sd, ctx->ass_track, opts, shared_opts);
+-
 -#if LIBASS_VERSION >= 0x01302000
 -    ass_set_check_readorder(ctx->ass_track, sd->opts->sub_clear_on_seek ? 0 : 1);
 -#endif
-+// #if LIBASS_VERSION >= 0x01302000
-+//     ass_set_check_readorder(ctx->ass_track, sd->opts->sub_clear_on_seek ? 0 : 1);
-+// #endif
- 
+-
+-#if LIBASS_VERSION >= 0x01703010
+-    ass_configure_prune(ctx->ass_track, sd->opts->ass_prune_delay * 1000.0);
+-#endif
+-
 -    enable_output(sd, true);
-+//     enable_output(sd, true);
+-    ass_set_cache_limits(ctx->ass_renderer, sd->opts->sub_glyph_limit, sd->opts->sub_bitmap_max_size);
++//    struct sd_ass_priv *ctx = sd->priv;
++//    struct mp_subtitle_opts *opts = sd->opts;
++//    struct mp_subtitle_shared_opts *shared_opts = sd->shared_opts;
++//
++//    ctx->ass_library = mp_ass_init(sd->global, sd->opts->sub_style, sd->log);
++//    ass_set_extract_fonts(ctx->ass_library, opts->use_embedded_fonts);
++//
++//    add_subtitle_fonts(sd);
++//
++//    if (shared_opts->ass_style_override[sd->order])
++//        ass_set_style_overrides(ctx->ass_library, opts->ass_style_override_list);
++//
++//    ctx->ass_track = ass_new_track(ctx->ass_library);
++//    ctx->ass_track->track_type = TRACK_TYPE_ASS;
++//
++//    ctx->shadow_track = ass_new_track(ctx->ass_library);
++//    ctx->shadow_track->PlayResX = MP_ASS_FONT_PLAYRESX;
++//    ctx->shadow_track->PlayResY = MP_ASS_FONT_PLAYRESY;
++//    mp_ass_add_default_styles(sd, ctx->shadow_track, opts, shared_opts);
++//
++//    char *extradata = sd->codec->extradata;
++//    int extradata_size = sd->codec->extradata_size;
++//    if (ctx->converter) {
++//        extradata = lavc_conv_get_extradata(ctx->converter);
++//        extradata_size = extradata ? strlen(extradata) : 0;
++//    }
++//    if (extradata)
++//        ass_process_codec_private(ctx->ass_track, extradata, extradata_size);
++//
++//    mp_ass_add_default_styles(sd, ctx->ass_track, opts, shared_opts);
++//
++//#if LIBASS_VERSION >= 0x01302000
++//    ass_set_check_readorder(ctx->ass_track, sd->opts->sub_clear_on_seek ? 0 : 1);
++//#endif
++//
++//#if LIBASS_VERSION >= 0x01703010
++//    ass_configure_prune(ctx->ass_track, sd->opts->ass_prune_delay * 1000.0);
++//#endif
++//
++//    enable_output(sd, true);
++//    ass_set_cache_limits(ctx->ass_renderer, sd->opts->sub_glyph_limit, sd->opts->sub_bitmap_max_size);
  }
  
  static void assobjects_destroy(struct sd *sd)
