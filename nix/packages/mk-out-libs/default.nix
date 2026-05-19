@@ -84,7 +84,7 @@ if arch != archs.universal then
         targetPkgs.libplacebo
         targetPkgs.shaderc.lib
         targetPkgs.vulkan-loader
-        targetPkgs.lcms2
+        targetPkgs.lcms2.out
         targetPkgs.libdovi
       ]
       ++ pkgs.lib.optionals (variant == variants.video && flavor == flavors.encodersgpl) [
@@ -130,11 +130,18 @@ if arch != archs.universal then
       done
 
       # Change dylib's dep path /nix/store/**/libfoo.99.dylib -> @rpath/libfoo.99.dylib
+      # Intercept system libraries (libc++ and libiconv) to keep them linked to system paths
       for file in ./build/lib*.dylib; do
         deps=$(otool -L $file | tail -n +3 | sed -n 's|.*\(/nix/store/[^ ]*\).*|\1|p')
         for dep in $deps; do
           name=$(basename $dep)
-          install_name_tool -change $dep @rpath/$name $file
+          if [[ "$name" =~ "libc++" ]]; then
+            install_name_tool -change $dep /usr/lib/libc++.1.dylib $file
+          elif [[ "$name" =~ "libiconv" ]]; then
+            install_name_tool -change $dep /usr/lib/libiconv.2.dylib $file
+          else
+            install_name_tool -change $dep @rpath/$name $file
+          fi
         done
       done
 
