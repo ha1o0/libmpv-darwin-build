@@ -151,9 +151,16 @@ const struct clipboard_backend clipboard_backend_mac = {
     .set_data = set_data,
 };
 #else
+static int stub_init(struct clipboard_ctx *cl, struct clipboard_init_params *params)
+{
+    (void)cl;
+    (void)params;
+    return CLIPBOARD_UNAVAILABLE;
+}
 const struct clipboard_backend clipboard_backend_mac = {
     .name = "mac",
     .desc = "macOS clipboard (stub)",
+    .init = stub_init,
 };
 #endif
 EOF
