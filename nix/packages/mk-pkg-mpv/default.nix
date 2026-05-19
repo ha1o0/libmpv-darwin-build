@@ -60,41 +60,49 @@ let
       sed -i 's|#include <libplacebo/renderer.h>|#include <libplacebo/renderer.h>\n#ifndef PL_CLEAR_BLUR\n#define PL_CLEAR_BLUR PL_CLEAR_COLOR\n#define NO_BACKGROUND_BLUR 1\n#endif|g' video/out/vo_gpu_next.c
       sed -i 's|pars->params.blur_radius = p->next_opts->background_blur_radius;|#ifndef NO_BACKGROUND_BLUR\n    pars->params.blur_radius = p->next_opts->background_blur_radius;\n#endif|g' video/out/vo_gpu_next.c
 
-      # 1. 忽略 iOS 上编译 ao_avfoundation.m 产生的 availability 警告
-      sed -i '1s/^/#pragma clang diagnostic ignored "-Wunguarded-availability-new"\n/' audio/out/ao_avfoundation.m
+      # 仅在编译 iOS 平台时，应用 CoreAudio 兼容降级补丁
+      ${if os == "ios" || os == "iossimulator" then ''
+        # 1. 忽略 iOS 上编译 ao_avfoundation.m 产生的 availability 警告
+        sed -i '1s/^/#pragma clang diagnostic ignored "-Wunguarded-availability-new"\n/' audio/out/ao_avfoundation.m
 
-      # 2. 在 iOS 上屏蔽不被支持的 setAudioOutputDeviceUniqueID: 属性调用
-      sed -i 's|\[p->renderer setAudioOutputDeviceUniqueID:(NSString\*)cfstr_from_cstr(ao->device)\];|#if TARGET_OS_OSX\n        [p->renderer setAudioOutputDeviceUniqueID:(NSString*)cfstr_from_cstr(ao->device)];\n#endif|g' audio/out/ao_avfoundation.m
+        # 2. 在 iOS 上屏蔽不被支持 of setAudioOutputDeviceUniqueID: 属性调用
+        sed -i 's|\[p->renderer setAudioOutputDeviceUniqueID:(NSString\*)cfstr_from_cstr(ao->device)\];|#if TARGET_OS_OSX\n        [p->renderer setAudioOutputDeviceUniqueID:(NSString*)cfstr_from_cstr(ao->device)];\n#endif|g' audio/out/ao_avfoundation.m
 
-      # 3. 将 ao_coreaudio_utils.h 中所有 macOS CoreAudio HAL 的独占声明在 iOS 平台排除
-      sed -i 's|#if HAVE_COREAUDIO \|\| HAVE_AVFOUNDATION|#if HAVE_COREAUDIO|g' audio/out/ao_coreaudio_utils.h
+        # 3. 将 ao_coreaudio_utils.h 中所有 macOS CoreAudio HAL 的独占声明在 iOS 平台排除
+        sed -i 's|#if HAVE_COREAUDIO \|\| HAVE_AVFOUNDATION|#if HAVE_COREAUDIO|g' audio/out/ao_coreaudio_utils.h
 
-      # 4. 在 ao_coreaudio_chmap.h 中将 macOS 独占的 AudioDeviceID 函数声明拆分并用 HAVE_COREAUDIO 保护，保留 iOS 所需的 layout 函数
-      sed -i 's|void ca_log_layout(struct ao \*ao, int l, AudioChannelLayout \*layout);|void ca_log_layout(struct ao *ao, int l, AudioChannelLayout *layout);\n#endif\n#if HAVE_COREAUDIO|g' audio/out/ao_coreaudio_chmap.h
+        # 4. 在 ao_coreaudio_chmap.h 中将 macOS 独占的 AudioDeviceID 函数声明拆分并用 HAVE_COREAUDIO 保护，保留 iOS 所需的 layout 函数
+        sed -i 's|void ca_log_layout(struct ao \*ao, int l, AudioChannelLayout \*layout);|void ca_log_layout(struct ao *ao, int l, AudioChannelLayout *layout);\n#endif\n#if HAVE_COREAUDIO|g' audio/out/ao_coreaudio_chmap.h
 
-      # 5. 将 ao_coreaudio_properties.c/.h 的全部内容用 HAVE_COREAUDIO 保护，在 iOS 下编译为空文件避免缺少类型报错
-      sed -i '1s/^/#if HAVE_COREAUDIO\n/' audio/out/ao_coreaudio_properties.c
-      echo "#endif" >> audio/out/ao_coreaudio_properties.c
-      sed -i '1s/^/#if HAVE_COREAUDIO\n/' audio/out/ao_coreaudio_properties.h
-      echo "#endif" >> audio/out/ao_coreaudio_properties.h
+        # 5. 将 ao_coreaudio_properties.c/.h 的全部内容用 HAVE_COREAUDIO 保护，在 iOS 下编译为空文件避免缺少类型报错
+        sed -i '1s/^/#if HAVE_COREAUDIO\n/' audio/out/ao_coreaudio_properties.c
+        echo "#endif" >> audio/out/ao_coreaudio_properties.c
+        sed -i '1s/^/#if HAVE_COREAUDIO\n/' audio/out/ao_coreaudio_properties.h
+        echo "#endif" >> audio/out/ao_coreaudio_properties.h
 
-      # 6. 将 ao_coreaudio_chmap.c 中需要 AudioDeviceID (macOS HAL) 的后半段实现部分在 iOS 下用 HAVE_COREAUDIO 保护起来
-      sed -i 's|static AudioChannelLayout\* ca_query_layout(|#if HAVE_COREAUDIO\nstatic AudioChannelLayout* ca_query_layout(|g' audio/out/ao_coreaudio_chmap.c
-      echo "#endif" >> audio/out/ao_coreaudio_chmap.c
+        # 6. 将 ao_coreaudio_chmap.c 中需要 AudioDeviceID (macOS HAL) 的后半段实现部分在 iOS 下用 HAVE_COREAUDIO 保护起来
+        sed -i 's|static AudioChannelLayout\* ca_query_layout(|#if HAVE_COREAUDIO\nstatic AudioChannelLayout* ca_query_layout(|g' audio/out/ao_coreaudio_chmap.c
+        echo "#endif" >> audio/out/ao_coreaudio_chmap.c
 
-      # 7. 忽略 iOS 上编译 ao_coreaudio_utils.c 时缺失的 <CoreAudio/HostTime.h> 头文件
-      sed -i 's|#include <CoreAudio/HostTime.h>|#if HAVE_COREAUDIO\n#include <CoreAudio/HostTime.h>\n#endif|g' audio/out/ao_coreaudio_utils.c
+        # 7. 忽略 iOS 上编译 ao_coreaudio_utils.c 时缺失的 <CoreAudio/HostTime.h> 头文件
+        sed -i 's|#include <CoreAudio/HostTime.h>|#if HAVE_COREAUDIO\n#include <CoreAudio/HostTime.h>\n#endif|g' audio/out/ao_coreaudio_utils.c
 
-      # 8. 将 ao_coreaudio_utils.c 前段 macOS 独享的硬件查询逻辑用 HAVE_COREAUDIO 保护起来
-      sed -i 's|static bool ca_is_output_device(|#if HAVE_COREAUDIO\nstatic bool ca_is_output_device(|g' audio/out/ao_coreaudio_utils.c
-      sed -i 's|bool check_ca_st(|#endif\n\nbool check_ca_st(|g' audio/out/ao_coreaudio_utils.c
+        # 8. 将 ao_coreaudio_utils.c 前段 macOS 独享的硬件查询逻辑用 HAVE_COREAUDIO 保护起来
+        sed -i 's|static bool ca_is_output_device(|#if HAVE_COREAUDIO\nstatic bool ca_is_output_device(|g' audio/out/ao_coreaudio_utils.c
+        sed -i 's|bool check_ca_st(|#endif\n\nbool check_ca_st(|g' audio/out/ao_coreaudio_utils.c
 
-      # 9. 将 ao_coreaudio_utils.c 后段 macOS 独享的硬件流锁定与混合设置在 iOS 下屏蔽
-      sed -i 's|bool ca_stream_supports_compressed(|#if HAVE_COREAUDIO\nbool ca_stream_supports_compressed(|g' audio/out/ao_coreaudio_utils.c
-      echo "#endif" >> audio/out/ao_coreaudio_utils.c
+        # 9. 将 ao_coreaudio_utils.c 后段 macOS 独享的硬件流锁定与混合设置在 iOS 下屏蔽
+        sed -i 's|bool ca_stream_supports_compressed(|#if HAVE_COREAUDIO\nbool ca_stream_supports_compressed(|g' audio/out/ao_coreaudio_utils.c
+        echo "#endif" >> audio/out/ao_coreaudio_utils.c
 
-      # 10. 在 iOS 下将 ca_get_latency 延迟计算强制降级到 mach_absolute_time 兼容分支，避开缺失的 HostTime API
-      sed -i 's|HAVE_COREAUDIO \|\| HAVE_AVFOUNDATION|HAVE_COREAUDIO|g' audio/out/ao_coreaudio_utils.c
+        # 10. 在 iOS 下将 ca_get_latency 延迟计算强制降级到 mach_absolute_time 兼容分支，避开缺失的 HostTime API
+        sed -i 's|HAVE_COREAUDIO \|\| HAVE_AVFOUNDATION|HAVE_COREAUDIO|g' audio/out/ao_coreaudio_utils.c
+      '' else ""}
+
+      # 针对 macOS: 当禁用 Swift 构建但启用 Cocoa 时，在 osdep/mac/app_bridge.m 末尾追加 Cocoa Bridge 全套存根，确保链接符号完整
+      ${if os == "macos" then ''
+        sed -i '/void cocoa_init_cocoa_cb(void)/,/^#endif/ { s/^#endif/#else\nvoid cocoa_init_media_keys(void) {}\nvoid cocoa_uninit_media_keys(void) {}\nvoid cocoa_set_input_context(struct input_ctx *input_context) {}\nvoid cocoa_set_mpv_handle(struct mpv_handle *ctx) {}\nvoid cocoa_init_cocoa_cb(void) {}\nint cocoa_main(int argc, char *argv[]) { return 0; }\n#endif/ }' osdep/mac/app_bridge.m
+      '' else ""}
 
       cat << 'EOF' > player/clipboard/clipboard-mac.m
 #include "config.h"
