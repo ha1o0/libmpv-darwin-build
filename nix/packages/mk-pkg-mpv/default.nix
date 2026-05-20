@@ -101,7 +101,15 @@ let
 
       # 针对 macOS: 当禁用 Swift 构建但启用 Cocoa 时，在 osdep/mac/app_bridge.m 末尾追加 Cocoa Bridge 全套存根，确保链接符号完整
       ${if os == "macos" then ''
-        sed -i '/void cocoa_init_cocoa_cb(void)/,/^#endif/ { s/^#endif/#else\nvoid cocoa_init_media_keys(void) {}\nvoid cocoa_uninit_media_keys(void) {}\nvoid cocoa_set_input_context(struct input_ctx *input_context) {}\nvoid cocoa_set_mpv_handle(struct mpv_handle *ctx) {}\nvoid cocoa_init_cocoa_cb(void) {}\nint cocoa_main(int argc, char *argv[]) { return 0; }\n#endif/ }' osdep/mac/app_bridge.m
+        # mpv master creates a Cocoa-owned internal client whenever HAVE_COCOA is
+        # enabled. In this libmpv-only build Swift is intentionally disabled, so
+        # no AppHub exists to consume that client. Leaving it alive makes playback
+        # block forever in "Waiting for scripts...". Keep Cocoa/GL features
+        # enabled for macOS rendering, but only create this client when Swift is
+        # actually available.
+        sed -i '/#if HAVE_COCOA/ { N; N; s|#if HAVE_COCOA\n    mpv_handle \*ctx = mp_new_client(mpctx->clients, "mac");\n    cocoa_set_mpv_handle(ctx);|#if HAVE_COCOA \&\& HAVE_SWIFT\n    mpv_handle *ctx = mp_new_client(mpctx->clients, "mac");\n    cocoa_set_mpv_handle(ctx);| }' player/main.c
+
+        sed -i '/void cocoa_init_cocoa_cb(void)/,/^#endif/ { s/^#endif/#else\nvoid cocoa_init_media_keys(void) {}\nvoid cocoa_uninit_media_keys(void) {}\nvoid cocoa_set_input_context(struct input_ctx *input_context) { (void)input_context; }\nvoid cocoa_set_mpv_handle(struct mpv_handle *ctx) { (void)ctx; }\nvoid cocoa_init_cocoa_cb(void) {}\nint cocoa_main(int argc, char *argv[]) { (void)argc; (void)argv; return 0; }\n#endif/ }' osdep/mac/app_bridge.m
       '' else ""}
 
       cat << 'EOF' > player/clipboard/clipboard-mac.m
@@ -229,20 +237,26 @@ EOF
         -Dlibarchive=disabled `# libarchive wrapper for reading zip files and more`
         -Dlibavdevice=disabled `# libavdevice`
         -Dlibbluray=disabled `# Bluray support`
+        -Dlibcurl=disabled `# libcurl-based stream backend`
         -Dlua=disabled `# Lua`
         -Dpthread-debug=disabled `# pthread runtime debugging wrappers`
         -Drubberband=disabled `# librubberband support`
         -Dsdl2-gamepad=disabled `# SDL2 gamepad input`
+        -Dsubrandr=disabled `# subrandr support`
         -Duchardet=disabled `# uchardet support`
         -Duwp=disabled `# Universal Windows Platform`
         -Dvapoursynth=disabled `# VapourSynth filter bridge`
         -Dvector=disabled `# GCC vector instructions`
+        -Dx11-clipboard=disabled `# X11 clipboard backend`
         -Dzimg=disabled `# libzimg support (high quality software scaler)`
         -Dzlib=disabled `# zlib`
 
         `# audio output features`
+        -Daaudio=disabled `# Android AAudio audio output`
         -Dalsa=disabled `# ALSA audio output`
+        -Daudiotrack=disabled `# Android AudioTrack audio output`
         -Daudiounit=disabled `# AudioUnit output for iOS`
+        -Davfoundation=disabled `# AVFoundation audio output`
         -Dcoreaudio=disabled `# CoreAudio audio output`
         -Djack=disabled `# JACK audio output`
         -Dopenal=disabled `# OpenAL audio output`
@@ -255,10 +269,12 @@ EOF
         -Dwasapi=disabled `# WASAPI audio output`
 
         `# video output features`
+        -Damf=disabled `# AMD AMF`
         -Dcaca=disabled `# CACA`
         -Dcocoa=disabled `# Cocoa`
         -Dd3d11=disabled `# Direct3D 11 video output`
         -Ddirect3d=disabled `# Direct3D support`
+        -Ddmabuf-wayland=disabled `# dmabuf-wayland video output`
         -Ddrm=disabled `# DRM`
         -Degl=disabled `# EGL 1.4`
         -Degl-android=disabled `# Android EGL support`
@@ -285,6 +301,7 @@ EOF
         -Dvaapi=disabled `# VAAPI acceleration`
         -Dvaapi-drm=disabled `# VAAPI (DRM/EGL support)`
         -Dvaapi-wayland=disabled `# VAAPI (Wayland support)`
+        -Dvaapi-win32=disabled `# VAAPI (Windows support)`
         -Dvaapi-x11=disabled `# VAAPI (X11 support)`
         -Dvulkan=disabled `# Vulkan context support`
         -Dwayland=disabled `# Wayland`
@@ -300,6 +317,7 @@ EOF
         -Dgl-dxinterop-d3d9=disabled `# OpenGL/DirectX Interop Backend DXVA2 interop`
         -Dios-gl=disabled `# iOS OpenGL ES hardware decoding interop support`
         -Dvideotoolbox-gl=disabled `# Videotoolbox with OpenGL`
+        -Dvideotoolbox-pl=disabled `# Videotoolbox with libplacebo`
 
         `# macOS features`
         -Dmacos-10-15-4-features=disabled `# macOS 10.15.4 SDK Features`
