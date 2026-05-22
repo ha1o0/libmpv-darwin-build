@@ -39,6 +39,9 @@ pkgs.stdenvNoCC.mkDerivation {
   inherit version;
   dontUnpack = true;
   enableParallelBuilding = true;
+  nativeBuildInputs = pkgs.lib.optionals (format == formats.xcframeworks) [
+    pkgs.zip
+  ];
   inherit src;
   buildPhase = ''
     build=$PWD/build
@@ -46,6 +49,15 @@ pkgs.stdenvNoCC.mkDerivation {
 
     cp --no-preserve=mode -r $src ${archiveBaseName}
     tar -czvf $build/${archiveBaseName}.tar.gz ${archiveBaseName}
+  ''
+  + pkgs.lib.optionalString (format == formats.xcframeworks) ''
+    (
+      cd ${archiveBaseName}
+      for XCFRAMEWORK in *.xcframework; do
+        FRAMEWORK_NAME=$(basename $XCFRAMEWORK .xcframework)
+        zip -Xyr $build/${archiveBaseName}_$FRAMEWORK_NAME.zip $XCFRAMEWORK
+      done
+    )
   '';
   installPhase = ''
     cp -r $build $out
