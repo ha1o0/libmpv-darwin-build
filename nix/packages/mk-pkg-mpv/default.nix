@@ -54,6 +54,7 @@ let
       chmod -R 777 $src
 
       cd $src
+      patch -p1 <${../../../patches/mpv-fix-libmpv-gpu-next-color-management.patch}
       sed -i 's/>=7.360.1/>=7.349.0/g' meson.build
       sed -i 's|#include "csputils.h"|#include "csputils.h"\n#ifndef PL_COLOR_SYSTEM_YCGCO_RE\n#define PL_COLOR_SYSTEM_YCGCO_RE PL_COLOR_SYSTEM_YCGCO\n#endif\n#ifndef PL_COLOR_SYSTEM_YCGCO_RO\n#define PL_COLOR_SYSTEM_YCGCO_RO PL_COLOR_SYSTEM_YCGCO\n#endif|g' video/csputils.c
       sed -i 's|#include "mp_image.h"|#include "mp_image.h"\n#ifndef PL_COLOR_SYSTEM_YCGCO_RE\n#define PL_COLOR_SYSTEM_YCGCO_RE PL_COLOR_SYSTEM_YCGCO\n#endif\n#ifndef PL_COLOR_SYSTEM_YCGCO_RO\n#define PL_COLOR_SYSTEM_YCGCO_RO PL_COLOR_SYSTEM_YCGCO\n#endif|g' video/mp_image.c
