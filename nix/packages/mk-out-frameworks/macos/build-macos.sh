@@ -83,6 +83,17 @@ find ${DEPS} -name "*.dylib" -type f | while read DYLIB; do
     sed -i 's/${MIN_OS_VERSION}/'${MIN_OS_VERSION}'/g' "${FRAMEWORK_DIR}/Versions/A/Resources/Info.plist"
     plutil -convert binary1 "${FRAMEWORK_DIR}/Versions/A/Resources/Info.plist"
 
+    # Keep MoltenVK discoverable through VK_DRIVER_FILES without requiring a
+    # machine-wide Vulkan SDK installation. The path is relative to this file.
+    if [ "${FRAMEWORK_NAME}" == "MoltenVK" ]; then
+        ICD_DIR="${FRAMEWORK_DIR}/Versions/A/Resources/vulkan/icd.d"
+        mkdir -p "${ICD_DIR}"
+        cp "${DEPS}/vulkan/icd.d/MoltenVK_icd.json" "${ICD_DIR}/MoltenVK_icd.json"
+        sed -i -E \
+            's|"library_path"[[:space:]]*:[[:space:]]*"[^"]*"|"library_path" : "../../../MoltenVK"|' \
+            "${ICD_DIR}/MoltenVK_icd.json"
+    fi
+
     # create sym links
     ln -s A "${FRAMEWORK_DIR}/Versions/Current"
     ln -s Versions/Current/${FRAMEWORK_NAME} "${FRAMEWORK_DIR}/${FRAMEWORK_NAME}"
