@@ -65,6 +65,9 @@ jobs:
         run: |
           nix develop -c make XCODE_PATH=${XCODE_PATH} VERSION=${VERSION}
 
+      - name: Verify macOS native video artifacts
+        run: bash .github/scripts/verify-macos-native-video-artifacts.sh result
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
