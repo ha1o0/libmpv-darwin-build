@@ -23,6 +23,8 @@ let
       ;
   };
   pname = import ../../utils/name/output.nix name;
+  # The amd64 artifact is built natively under Rosetta on the arm64 runner.
+  # Keep the package set x86_64-native so Rust and its linker share one target.
   targetPkgs =
     if arch == "amd64" then
       import pkgs.path {
@@ -43,6 +45,7 @@ if arch != archs.universal then
     xctoolchainInstallNameTool = callPackage ../../utils/xctoolchain/install-name-tool.nix { };
 
     mpv = callPackage ../mk-pkg-mpv/default.nix { };
+    libplacebo = callPackage ../mk-pkg-libplacebo/default.nix { };
     ffmpeg = callPackage ../mk-pkg-ffmpeg/default.nix { };
     mbedtls = callPackage ../mk-pkg-mbedtls/default.nix { };
     fftoolsFfi = callPackage ../mk-pkg-fftools-ffi/default.nix { };
@@ -81,9 +84,11 @@ if arch != archs.universal then
         libpng
       ]
       ++ pkgs.lib.optionals (os == "macos" && variant == "video") [
-        targetPkgs.libplacebo
+        libplacebo
         targetPkgs.shaderc.lib
         targetPkgs.vulkan-loader
+        targetPkgs.moltenvk
+        targetPkgs.glslang
         targetPkgs.lcms2.out
         targetPkgs.libdovi
       ]
@@ -153,6 +158,21 @@ if arch != archs.universal then
           install_name_tool -change $dep @rpath/$name $file
         done
       done
+
+      ${pkgs.lib.optionalString (os == "macos" && variant == variants.video) ''
+        # The Vulkan loader resolves this path relative to the manifest. Keep
+        # the ICD relocatable so release artifacts never refer to /nix/store.
+        mkdir -p ./build/vulkan/icd.d
+        cp ${targetPkgs.moltenvk}/share/vulkan/icd.d/MoltenVK_icd.json \
+          ./build/vulkan/icd.d/MoltenVK_icd.json
+        sed -i -E \
+          's|"library_path"[[:space:]]*:[[:space:]]*"[^"]*"|"library_path" : "../../libMoltenVK.dylib"|' \
+          ./build/vulkan/icd.d/MoltenVK_icd.json
+        if grep -Fq '/nix/store/' ./build/vulkan/icd.d/MoltenVK_icd.json; then
+          echo "MoltenVK ICD manifest still contains a Nix store path" >&2
+          exit 1
+        fi
+      ''}
     '';
     installPhase = ''
       cp -r build $out
@@ -216,6 +236,10 @@ else
         lipo_cmd+=" -output ./build/$lib_name"
         eval "$lipo_cmd"
       done
+
+      ${pkgs.lib.optionalString (os == "macos" && variant == variants.video) ''
+        cp -R ''${deps[0]}/vulkan ./build/
+      ''}
     '';
     installPhase = ''
       cp -r build $out
