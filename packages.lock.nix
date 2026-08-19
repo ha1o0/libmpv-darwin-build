@@ -34,6 +34,11 @@
     url = "https://github.com/libass/libass/releases/download/0.17.1/libass-0.17.1.tar.xz";
     sha256 = "f0da0bbfba476c16ae3e1cfd862256d30915911f7abaa1b16ce62ee653192784";
   };
+  libplacebo = {
+    version = "7.360.1";
+    url = "https://code.videolan.org/videolan/libplacebo/-/archive/v7.360.1/libplacebo-v7.360.1.tar.gz";
+    sha256 = "14c0a99f4b01557ec9826ce6b1d52f6de21be274ba03fd5aab7307f18766dc39";
+  };
   libogg = {
     version = "1.3.5";
     url = "https://github.com/xiph/ogg/releases/download/v1.3.5/libogg-1.3.5.tar.gz";
@@ -78,6 +83,16 @@
     version = "0.36.0";
     url = "https://github.com/ha1o0/mpv/archive/refs/heads/my-gpu-next.tar.gz";
     sha256 = "8ff7f966c928a017936588691c5f7e3ec9f44f13d9e0ad6e4b8c9f8a647e7d19";
+  };
+  mpvMacosNativeVideo = {
+    version = "0.41.0-git-d93c6698";
+    url = "https://github.com/ha1o0/mpv/archive/d93c6698e6f6c265885c60a883043742650b2bca.tar.gz";
+    sha256 = "cc764756c372c13d405298f4d9a41421ec3d38dbb1bb7144cd39f464960adff8";
+  };
+  vulkanHeaders = {
+    version = "1.4.357.0";
+    url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.357.0.tar.gz";
+    sha256 = "e87dce08116151f6b6d7de6b6faf41498e87e6cf848ff16fa3bd5402190ad4a3";
   };
   uchardet = {
     version = "0.0.8";
