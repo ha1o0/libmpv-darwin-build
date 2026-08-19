@@ -1,0 +1,201 @@
+diff --git a/video/out/mac_common.swift b/video/out/mac_common.swift
+index 234cdc37dc..b4a7072402 100644
+--- a/video/out/mac_common.swift
++++ b/video/out/mac_common.swift
+@@ -62,6 +62,10 @@ class MacCommon: Common {
+     @objc var layer: MetalLayer?
+ 
+     private var embeddedHostView: NSView?
++    private let embeddedStateLock = NSLock()
++    private var embeddedRenderSize = CGSize.zero
++    private var embeddedVisible = true
++    private var embeddedAppKitInitialized = false
+ 
+     var presentation: Presentation?
+     var timer: PreciseTimer?
+@@ -77,9 +81,35 @@ class MacCommon: Common {
+         presentation = Presentation(common: self)
+         timer = PreciseTimer(common: self)
+ 
+-        DispatchQueue.main.sync {
++        if isEmbeddedOutput {
++            // The VO is created on an mpv worker thread while libmpv callers may
++            // synchronously query properties on the AppKit thread. Waiting here
++            // for main.sync creates a lock cycle: AppKit waits for mpv's dispatch
++            // lock while the VO waits for AppKit. Create the CoreAnimation layer
++            // immediately, then attach the AppKit view asynchronously.
+             layer = MetalLayer(common: self)
+-            if let hostView = resolveEmbeddedHostView(), let layer = layer {
++            log.verbose("Initializing embedded macvk AppKit state asynchronously")
++            DispatchQueue.main.async { [weak self] in
++                guard let self,
++                      let currentVO = self.eventsLock.withLock({ self.vo }) else { return }
++                self.installEmbeddedView(currentVO)
++            }
++        } else {
++            DispatchQueue.main.sync {
++                layer = MetalLayer(common: self)
++                initMisc(vo)
++            }
++        }
++    }
++
++    private var isEmbeddedOutput: Bool {
++        option.vo.WinID > 0
++    }
++
++    private func installEmbeddedView(_ vo: UnsafeMutablePointer<vo>) {
++        let needsInitialization = !embeddedAppKitInitialized
++        if let hostView = resolveEmbeddedHostView(), let layer = layer {
++            if embeddedHostView == nil {
+                 embeddedHostView = hostView
+                 let embeddedView = EmbeddedView(frame: hostView.bounds, common: self)
+                 embeddedView.layer = layer
+@@ -90,9 +120,31 @@ class MacCommon: Common {
+                 view = embeddedView
+                 hostView.addSubview(embeddedView)
+                 log.verbose("Embedding macvk output in external NSView: \(hostView)")
++            } else {
++                view?.frame = hostView.bounds
+             }
++
++            updateEmbeddedState()
++        } else if embeddedHostView == nil {
++            log.error("Unable to attach macvk output: embedded host view is unavailable")
++        }
++
++        if needsInitialization {
++            embeddedAppKitInitialized = true
+             initMisc(vo)
+         }
++        windowDidResize()
++    }
++
++    private func updateEmbeddedState() {
++        guard let hostView = embeddedHostView, let view = view else { return }
++        let size = view.convertToBacking(view.bounds).size
++        let visible = !hostView.isHidden &&
++                      hostView.window?.occlusionState.contains(.visible) == true
++        embeddedStateLock.withLock {
++            embeddedRenderSize = size
++            embeddedVisible = visible
++        }
+     }
+ 
+     private func resolveEmbeddedHostView() -> NSView? {
+@@ -113,12 +165,18 @@ class MacCommon: Common {
+     @objc func config(_ vo: UnsafeMutablePointer<vo>) -> Bool {
+         eventsLock.withLock { self.vo = vo }
+ 
+-        if let hostView = embeddedHostView {
+-            DispatchQueue.main.sync {
+-                view?.frame = hostView.bounds
+-                layer?.contentsScale = hostView.window?.backingScaleFactor ?? 1
+-                windowDidResize()
+-                updateICCProfile()
++        if isEmbeddedOutput {
++            DispatchQueue.main.async { [weak self] in
++                guard let self,
++                      let currentVO = self.eventsLock.withLock({ self.vo }) else { return }
++                self.installEmbeddedView(currentVO)
++                if let hostView = self.embeddedHostView {
++                    self.view?.frame = hostView.bounds
++                    self.layer?.contentsScale = hostView.window?.backingScaleFactor ?? 1
++                    self.updateEmbeddedState()
++                    self.windowDidResize()
++                    self.updateICCProfile()
++                }
+             }
+             return true
+         }
+@@ -157,26 +215,39 @@ class MacCommon: Common {
+     }
+ 
+     @objc func uninit(_ vo: UnsafeMutablePointer<vo>) {
+-        if embeddedHostView == nil {
++        if !isEmbeddedOutput {
+             window?.waitForAnimation()
+         }
+ 
+         timer?.terminate()
+ 
+-        DispatchQueue.main.sync {
+-            if self.embeddedHostView == nil {
++        if !isEmbeddedOutput {
++            DispatchQueue.main.sync {
+                 window?.delegate = nil
+                 window?.close()
++                uninitCommon()
++                view = nil
++                embeddedHostView = nil
+             }
++            return
++        }
+ 
+-            uninitCommon()
+-            view = nil
+-            embeddedHostView = nil
++        let cleanup = {
++            self.uninitCommon()
++            self.view = nil
++            self.embeddedHostView = nil
++            self.embeddedAppKitInitialized = false
++        }
++        if Thread.isMainThread {
++            cleanup()
++        } else {
++            DispatchQueue.main.async(execute: cleanup)
+         }
+     }
+ 
+     func embeddedViewDidResize() {
+         guard embeddedHostView != nil else { return }
++        updateEmbeddedState()
+         windowDidResize()
+     }
+ 
+@@ -186,16 +257,22 @@ class MacCommon: Common {
+             updateDisplaylink()
+         }
+         embeddedViewDidChangeBackingProperties()
++        updateEmbeddedState()
+         updateICCProfile()
+     }
+ 
+     func embeddedViewDidChangeBackingProperties() {
+         guard embeddedHostView != nil else { return }
+         layer?.contentsScale = view?.window?.backingScaleFactor ?? 1
++        updateEmbeddedState()
+         windowDidResize()
+     }
+ 
+     @objc func renderSize() -> CGSize {
++        if isEmbeddedOutput {
++            return embeddedStateLock.withLock { embeddedRenderSize }
++        }
++
+         var size = CGSize.zero
+         let updateSize = {
+             if self.embeddedHostView != nil, let view = self.view {
+@@ -234,6 +311,11 @@ class MacCommon: Common {
+     }
+ 
+     @objc func isVisible() -> Bool {
++        if isEmbeddedOutput {
++            let visible = embeddedStateLock.withLock { embeddedVisible }
++            return visible || option.vo.force_render || needsInitialDraw
++        }
++
+         var visible = false
+         let updateVisibility = {
+             if let hostView = self.embeddedHostView {
+@@ -254,6 +336,9 @@ class MacCommon: Common {
+ 
+     @objc func update(alpha: Bool) {
+         layer?.wantsAlpha = alpha
++        if isEmbeddedOutput {
++            return
++        }
+         DispatchQueue.main.sync {
+             window?.isOpaque = !alpha
+             window?.backgroundColor = alpha ? NSColor.clear : nil

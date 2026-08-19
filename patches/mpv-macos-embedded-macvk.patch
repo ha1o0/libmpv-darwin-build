@@ -1,0 +1,283 @@
+diff --git a/video/out/mac/common.swift b/video/out/mac/common.swift
+index 07b9f83149..acf308aa54 100644
+--- a/video/out/mac/common.swift
++++ b/video/out/mac/common.swift
+@@ -168,7 +168,7 @@ class Common: NSObject {
+     func startDisplayLink(_ vo: UnsafeMutablePointer<vo>) {
+         CVDisplayLinkCreateWithActiveCGDisplays(&link)
+
+-        guard let screen = getTargetScreen(forFullscreen: false) ?? NSScreen.main,
++        guard let screen = getCurrentScreen(),
+               let link = self.link else {
+             log.warning("Couldn't start DisplayLink, no Screen or DisplayLink available")
+             return
+@@ -188,7 +188,7 @@ class Common: NSObject {
+     }
+
+     func updateDisplaylink() {
+-        guard let screen = window?.screen, let link = self.link else {
++        guard let screen = getCurrentScreen(), let link = self.link else {
+             log.warning("Couldn't update DisplayLink, no Screen or DisplayLink available")
+             return
+         }
+@@ -404,9 +404,10 @@ class Common: NSObject {
+     }
+
+     func getCurrentScreen() -> NSScreen? {
+-         return window != nil ? window?.screen :
+-                                    getTargetScreen(forFullscreen: false) ??
+-                                    NSScreen.main
++        return window?.screen ??
++               view?.window?.screen ??
++               getTargetScreen(forFullscreen: false) ??
++               NSScreen.main
+     }
+
+     func getWindowGeometry(forScreen screen: NSScreen,
+@@ -555,7 +556,8 @@ class Common: NSObject {
+             fps.pointee = currentFps()
+             return VO_TRUE
+         case VOCTRL_GET_WINDOW_ID:
+-            guard let window = window else {
++            let hostWindow: NSWindow? = window ?? view?.window
++            guard let window = hostWindow else {
+                 return VO_NOTAVAIL
+             }
+             let wid = data!.assumingMemoryBound(to: Int64.self)
+@@ -565,6 +567,7 @@ class Common: NSObject {
+             let scaleFactor = data!.assumingMemoryBound(to: CDouble.self)
+             let screen = getCurrentScreen()
+             let factor = window?.backingScaleFactor ??
++                         view?.window?.backingScaleFactor ??
+                          screen?.backingScaleFactor ?? 1.0
+             scaleFactor.pointee = Double(factor)
+             return VO_TRUE
+@@ -605,8 +608,12 @@ class Common: NSObject {
+         case VOCTRL_GET_UNFS_WINDOW_SIZE:
+             let sizeData = data!.assumingMemoryBound(to: Int32.self)
+             let size = UnsafeMutableBufferPointer(start: sizeData, count: 2)
++            let embeddedRect = view.map {
++                Bool(option.vo.hidpi_window_scale) ? $0.bounds : $0.convertToBacking($0.bounds)
++            }
+             let rect = (Bool(option.vo.hidpi_window_scale) ? window?.unfsContentFrame
+-                : window?.unfsContentFramePixel) ?? NSRect(x: 0, y: 0, width: 1280, height: 720)
++                : window?.unfsContentFramePixel) ?? embeddedRect ??
++                NSRect(x: 0, y: 0, width: 1280, height: 720)
+
+             size[0] = Int32(rect.size.width)
+             size[1] = Int32(rect.size.height)
+diff --git a/video/out/mac_common.swift b/video/out/mac_common.swift
+index e2e9dd128d..234cdc37dc 100644
+--- a/video/out/mac_common.swift
++++ b/video/out/mac_common.swift
+@@ -17,9 +17,52 @@
+
+ import Cocoa
+
++private class EmbeddedView: View {
++    private var screenObserver: NSObjectProtocol?
++
++    deinit {
++        if let screenObserver {
++            NotificationCenter.default.removeObserver(screenObserver)
++        }
++    }
++
++    override func setFrameSize(_ newSize: NSSize) {
++        let changed = frame.size != newSize
++        super.setFrameSize(newSize)
++        if changed {
++            (common as? MacCommon)?.embeddedViewDidResize()
++        }
++    }
++
++    override func viewDidMoveToWindow() {
++        super.viewDidMoveToWindow()
++        if let screenObserver {
++            NotificationCenter.default.removeObserver(screenObserver)
++            self.screenObserver = nil
++        }
++        if let window {
++            screenObserver = NotificationCenter.default.addObserver(
++                forName: NSWindow.didChangeScreenNotification,
++                object: window,
++                queue: .main
++            ) { [weak self] _ in
++                (self?.common as? MacCommon)?.embeddedViewDidMoveToWindow()
++            }
++        }
++        (common as? MacCommon)?.embeddedViewDidMoveToWindow()
++    }
++
++    override func viewDidChangeBackingProperties() {
++        super.viewDidChangeBackingProperties()
++        (common as? MacCommon)?.embeddedViewDidChangeBackingProperties()
++    }
++}
++
+ class MacCommon: Common {
+     @objc var layer: MetalLayer?
+
++    private var embeddedHostView: NSView?
++
+     var presentation: Presentation?
+     var timer: PreciseTimer?
+     var swapTime: UInt64 = 0
+@@ -36,13 +79,50 @@ class MacCommon: Common {
+
+         DispatchQueue.main.sync {
+             layer = MetalLayer(common: self)
++            if let hostView = resolveEmbeddedHostView(), let layer = layer {
++                embeddedHostView = hostView
++                let embeddedView = EmbeddedView(frame: hostView.bounds, common: self)
++                embeddedView.layer = layer
++                embeddedView.wantsLayer = true
++                embeddedView.layerContentsPlacement = .scaleProportionallyToFit
++                layer.delegate = embeddedView
++                layer.contentsScale = hostView.window?.backingScaleFactor ?? 1
++                view = embeddedView
++                hostView.addSubview(embeddedView)
++                log.verbose("Embedding macvk output in external NSView: \(hostView)")
++            }
+             initMisc(vo)
+         }
+     }
+
++    private func resolveEmbeddedHostView() -> NSView? {
++        let windowID = option.vo.WinID
++        guard windowID > 0,
++              let pointer = UnsafeRawPointer(bitPattern: Int(windowID)) else {
++            return nil
++        }
++
++        let object = Unmanaged<AnyObject>.fromOpaque(pointer).takeUnretainedValue()
++        guard let hostView = object as? NSView else {
++            log.error("macOS --wid must point to an NSView")
++            return nil
++        }
++        return hostView
++    }
++
+     @objc func config(_ vo: UnsafeMutablePointer<vo>) -> Bool {
+         eventsLock.withLock { self.vo = vo }
+
++        if let hostView = embeddedHostView {
++            DispatchQueue.main.sync {
++                view?.frame = hostView.bounds
++                layer?.contentsScale = hostView.window?.backingScaleFactor ?? 1
++                windowDidResize()
++                updateICCProfile()
++            }
++            return true
++        }
++
+         DispatchQueue.main.sync {
+             let previousActiveApp = getActiveApp()
+             initApp()
+@@ -77,16 +157,60 @@ class MacCommon: Common {
+     }
+
+     @objc func uninit(_ vo: UnsafeMutablePointer<vo>) {
+-        window?.waitForAnimation()
++        if embeddedHostView == nil {
++            window?.waitForAnimation()
++        }
+
+         timer?.terminate()
+
+         DispatchQueue.main.sync {
+-            window?.delegate = nil
+-            window?.close()
++            if self.embeddedHostView == nil {
++                window?.delegate = nil
++                window?.close()
++            }
+
+             uninitCommon()
++            view = nil
++            embeddedHostView = nil
++        }
++    }
++
++    func embeddedViewDidResize() {
++        guard embeddedHostView != nil else { return }
++        windowDidResize()
++    }
++
++    func embeddedViewDidMoveToWindow() {
++        guard embeddedHostView != nil, view?.window != nil else { return }
++        if link != nil {
++            updateDisplaylink()
+         }
++        embeddedViewDidChangeBackingProperties()
++        updateICCProfile()
++    }
++
++    func embeddedViewDidChangeBackingProperties() {
++        guard embeddedHostView != nil else { return }
++        layer?.contentsScale = view?.window?.backingScaleFactor ?? 1
++        windowDidResize()
++    }
++
++    @objc func renderSize() -> CGSize {
++        var size = CGSize.zero
++        let updateSize = {
++            if self.embeddedHostView != nil, let view = self.view {
++                size = view.convertToBacking(view.bounds).size
++            } else {
++                size = self.window?.framePixel.size ?? CGSize.zero
++            }
++        }
++
++        if Thread.isMainThread {
++            updateSize()
++        } else {
++            DispatchQueue.main.sync(execute: updateSize)
++        }
++        return size
+     }
+
+     @objc func swapBuffer() {
+@@ -110,9 +234,22 @@ class MacCommon: Common {
+     }
+
+     @objc func isVisible() -> Bool {
+-        return window?.occlusionState.contains(.visible) ?? false ||
+-               option.vo.force_render ||
+-               needsInitialDraw
++        var visible = false
++        let updateVisibility = {
++            if let hostView = self.embeddedHostView {
++                visible = !hostView.isHidden &&
++                          (hostView.window?.occlusionState.contains(.visible) ?? false)
++            } else {
++                visible = self.window?.occlusionState.contains(.visible) ?? false
++            }
++        }
++
++        if Thread.isMainThread {
++            updateVisibility()
++        } else {
++            DispatchQueue.main.sync(execute: updateVisibility)
++        }
++        return visible || option.vo.force_render || needsInitialDraw
+     }
+
+     @objc func update(alpha: Bool) {
+diff --git a/video/out/vulkan/context_mac.m b/video/out/vulkan/context_mac.m
+index 559e361e81..4fd4abfe40 100644
+--- a/video/out/vulkan/context_mac.m
++++ b/video/out/vulkan/context_mac.m
+@@ -114,10 +114,9 @@ static bool resize(struct ra_ctx *ctx)
+ {
+     struct priv *p = ctx->priv;
+
+-    if (!p->vo_mac.window) {
++    CGSize size = [p->vo_mac renderSize];
++    if (size.width < 1 || size.height < 1)
+         return false;
+-    }
+-    CGSize size = p->vo_mac.window.framePixel.size;
+
+     return ra_vk_ctx_resize(ctx, (int)size.width, (int)size.height);
+ }
