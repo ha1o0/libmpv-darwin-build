@@ -103,11 +103,8 @@ let
     chmod -R 777 $src
 
     cd $src
-    patch -p1 <${../../../patches/mpv-fix-libmpv-gpu-next-color-management.patch}
-    ${pkgs.lib.optionalString macosNativeVideo ''
-      # The embedded view must be attached synchronously before Vulkan creates
-      # its Metal surface; libmpv callers avoid blocking AppKit instead.
-      patch -p1 <${../../../patches/mpv-macos-embedded-macvk.patch}
+    ${pkgs.lib.optionalString (!macosNativeVideo) ''
+      patch -p1 <${../../../patches/mpv-fix-libmpv-gpu-next-color-management.patch}
     ''}
 
     # 仅在编译 iOS 平台时，应用 CoreAudio 兼容降级补丁

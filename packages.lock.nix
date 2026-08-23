@@ -85,9 +85,9 @@
     sha256 = "8ff7f966c928a017936588691c5f7e3ec9f44f13d9e0ad6e4b8c9f8a647e7d19";
   };
   mpvMacosNativeVideo = {
-    version = "0.41.0-git-d93c6698";
-    url = "https://github.com/ha1o0/mpv/archive/d93c6698e6f6c265885c60a883043742650b2bca.tar.gz";
-    sha256 = "cc764756c372c13d405298f4d9a41421ec3d38dbb1bb7144cd39f464960adff8";
+    version = "0.41.0-git-8c8ec836";
+    url = "https://github.com/ha1o0/mpv/archive/8c8ec8365844886f847bec2b1d983c5dcac4b3fe.tar.gz";
+    sha256 = "86c45c14818d96f3adf23c265b2525a24614b65b94fb303ce85548d7d61e03fe";
   };
   vulkanHeaders = {
     version = "1.4.357.0";
