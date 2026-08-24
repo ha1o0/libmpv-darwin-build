@@ -88,11 +88,38 @@ for archive in "${archives[@]}"; do
         echo "MoltenVK ICD library_path does not resolve inside ${archive}" >&2
         exit 1
     fi
+    icd_api_version=$(sed -n -E 's|.*"api_version"[[:space:]]*:[[:space:]]*"([^"]+)".*|\1|p' "${icd_manifest}")
+    if [ "${icd_api_version}" != "1.3.0" ]; then
+        echo "Unexpected MoltenVK ICD API version in ${archive}: ${icd_api_version}" >&2
+        exit 1
+    fi
+
+    moltenvk_binary=$(find "${package_dir}/MoltenVK.xcframework" -type f -path '*/MoltenVK.framework/Versions/A/MoltenVK' | head -n 1)
+    if [ -z "${moltenvk_binary}" ]; then
+        echo "Unable to locate MoltenVK framework binary in ${archive}" >&2
+        exit 1
+    fi
+    lipo "${moltenvk_binary}" -verify_arch arm64 x86_64
+    if otool -L "${moltenvk_binary}" | grep -Eq '@rpath/(Glslang|SPIRV)\.framework'; then
+        echo "MoltenVK.framework still uses the pre-1.3 shader runtime dependencies" >&2
+        exit 1
+    fi
 
     for architecture in arm64 x86_64; do
         min_os=$(xcrun vtool -arch "${architecture}" -show-build "${mpv_binary}" | awk '/minos/ { print $2; exit }')
         if [ "${min_os}" != "11.0" ]; then
             echo "Unexpected Mpv.framework minimum macOS version for ${architecture}: ${min_os}" >&2
+            exit 1
+        fi
+        # Official MoltenVK 1.3.0 targets the first arm64-capable macOS release,
+        # while retaining its older Intel deployment target.
+        case "${architecture}" in
+            arm64) expected_moltenvk_min_os="11.0" ;;
+            x86_64) expected_moltenvk_min_os="10.15" ;;
+        esac
+        moltenvk_min_os=$(xcrun vtool -arch "${architecture}" -show-build "${moltenvk_binary}" | awk '/minos/ { print $2; exit }')
+        if [ "${moltenvk_min_os}" != "${expected_moltenvk_min_os}" ]; then
+            echo "Unexpected MoltenVK.framework minimum macOS version for ${architecture}: expected ${expected_moltenvk_min_os}, got ${moltenvk_min_os}" >&2
             exit 1
         fi
     done
