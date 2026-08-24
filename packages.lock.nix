@@ -89,6 +89,11 @@
     url = "https://github.com/ha1o0/mpv/archive/8c8ec8365844886f847bec2b1d983c5dcac4b3fe.tar.gz";
     sha256 = "86c45c14818d96f3adf23c265b2525a24614b65b94fb303ce85548d7d61e03fe";
   };
+  moltenvk = {
+    version = "1.3.0";
+    url = "https://github.com/KhronosGroup/MoltenVK/releases/download/v1.3.0/MoltenVK-macos.tar";
+    sha256 = "57b4184ded521b08a63e3642552ebef8b9e98c2f0bcffa49bd93bbe1301c173d";
+  };
   vulkanHeaders = {
     version = "1.4.357.0";
     url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.357.0.tar.gz";

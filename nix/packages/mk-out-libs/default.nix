@@ -45,6 +45,7 @@ if arch != archs.universal then
     xctoolchainInstallNameTool = callPackage ../../utils/xctoolchain/install-name-tool.nix { };
 
     mpv = callPackage ../mk-pkg-mpv/default.nix { };
+    moltenvk = callPackage ../mk-pkg-moltenvk/default.nix { };
     libplacebo = callPackage ../mk-pkg-libplacebo/default.nix { };
     ffmpeg = callPackage ../mk-pkg-ffmpeg/default.nix { };
     mbedtls = callPackage ../mk-pkg-mbedtls/default.nix { };
@@ -87,10 +88,10 @@ if arch != archs.universal then
         libplacebo
         targetPkgs.shaderc.lib
         targetPkgs.vulkan-loader
-        targetPkgs.moltenvk
-        # MoltenVK links against glslang's shared runtime libraries. The
-        # default glslang output is the bin output, so select out explicitly
-        # to bundle those dylibs into the relocatable framework package.
+        moltenvk
+        # Preserve the existing shader runtime framework set. MoltenVK 1.3.0
+        # no longer links to these libraries, but other consumers may rely on
+        # their continued presence in the video-full artifacts.
         targetPkgs.glslang.out
         targetPkgs.lcms2.out
         targetPkgs.libdovi
@@ -166,7 +167,7 @@ if arch != archs.universal then
         # The Vulkan loader resolves this path relative to the manifest. Keep
         # the ICD relocatable so release artifacts never refer to /nix/store.
         mkdir -p ./build/vulkan/icd.d
-        cp ${targetPkgs.moltenvk}/share/vulkan/icd.d/MoltenVK_icd.json \
+        cp ${moltenvk}/share/vulkan/icd.d/MoltenVK_icd.json \
           ./build/vulkan/icd.d/MoltenVK_icd.json
         sed -i -E \
           's|"library_path"[[:space:]]*:[[:space:]]*"[^"]*"|"library_path" : "../../libMoltenVK.dylib"|' \
