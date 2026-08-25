@@ -66,7 +66,7 @@
   };
   libx264 = {
     version = "a8b68ebf";
-    url = "https://code.videolan.org/videolan/x264/-/archive/a8b68ebfaa68621b5ac8907610d3335971839d52/libx264-a8b68ebfaa68621b5ac8907610d3335971839d52.tar.gz";
+    url = "https://codeload.github.com/mirror/x264/tar.gz/a8b68ebfaa68621b5ac8907610d3335971839d52";
     sha256 = "164688b63f11a6e4f6d945057fc5c57d5eefb97973d0029fb0303744e10839ff";
   };
   libxml2 = {
@@ -85,9 +85,9 @@
     sha256 = "8ff7f966c928a017936588691c5f7e3ec9f44f13d9e0ad6e4b8c9f8a647e7d19";
   };
   mpvMacosNativeVideo = {
-    version = "0.41.0-git-8c8ec836";
-    url = "https://github.com/ha1o0/mpv/archive/8c8ec8365844886f847bec2b1d983c5dcac4b3fe.tar.gz";
-    sha256 = "86c45c14818d96f3adf23c265b2525a24614b65b94fb303ce85548d7d61e03fe";
+    version = "0.41.0-git-f21c602c";
+    url = "https://github.com/ha1o0/mpv/archive/f21c602c3b379734c8bb5ccdc437e52514d2288c.tar.gz";
+    sha256 = "96c35ddf818542c225f28b8387eafafe76e8be25bfd77dc6d69d1016f8f4e134";
   };
   moltenvk = {
     version = "1.3.0";
