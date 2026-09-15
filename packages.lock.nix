@@ -2,12 +2,12 @@
   dav1d = {
     version = "1.2.1";
     url = "https://code.videolan.org/videolan/dav1d/-/archive/1.2.1/dav1d-1.2.1.tar.bz2";
-    sha256 = "a4003623cdc0109dec3aac8435520aa3fb12c4d69454fa227f2658cdb6dab5fa";
+    sha256 = "ed5f4107d602888ec520023dc138d6c705b5a0a2f7f01a7e292545196274a1a5";
   };
   ffmpeg = {
-    version = "6.1.5";
-    url = "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n6.1.5.tar.gz";
-    sha256 = "4bdedf0bfc705c99f515391054cd4df8723494c66016c33e0009419da5231e63";
+    version = "7.0.2";
+    url = "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.0.2.tar.gz";
+    sha256 = "5eb46d18d664a0ccadf7b0adee03bd3b7fa72893d667f36c69e202a807e6d533";
   };
   fftools-ffi = {
     version = "9b0d4da0";
