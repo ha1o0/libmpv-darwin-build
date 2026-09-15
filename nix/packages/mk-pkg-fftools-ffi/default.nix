@@ -21,13 +21,19 @@ let
     name = "${pname}-source-${version}";
     inherit (packageLock) url sha256;
   };
+  patchedSource = pkgs.runCommand "${pname}-patched-source-${version}" { } ''
+    cp -r ${src} src
+    chmod -R 777 src
+    sed -i 's/av_stream_get_end_pts(ost->st)/ost->last_mux_dts/g' src/ffmpeg.c
+    cp -r src $out
+  '';
 in
 
 pkgs.stdenvNoCC.mkDerivation {
   name = "${pname}-${os}-${arch}-${variant}-${version}";
   pname = pname;
   inherit version;
-  inherit src;
+  src = patchedSource;
   dontUnpack = true;
   enableParallelBuilding = true;
   nativeBuildInputs = [
