@@ -1,13 +1,13 @@
 {
   dav1d = {
     version = "1.2.1";
-    url = "https://code.videolan.org/videolan/dav1d/-/archive/1.2.1/dav1d-1.2.1.tar.bz2";
-    sha256 = "a4003623cdc0109dec3aac8435520aa3fb12c4d69454fa227f2658cdb6dab5fa";
+    url = "https://downloads.videolan.org/pub/videolan/dav1d/1.2.1/dav1d-1.2.1.tar.xz";
+    sha256 = "4e33eb61ec54c768a16da0cf8fa0928b4c4593f5f804a3c887d4a21c318340b2";
   };
   ffmpeg = {
-    version = "6.1.5";
-    url = "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n6.1.5.tar.gz";
-    sha256 = "4bdedf0bfc705c99f515391054cd4df8723494c66016c33e0009419da5231e63";
+    version = "7.0.2";
+    url = "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.0.2.tar.gz";
+    sha256 = "5eb46d18d664a0ccadf7b0adee03bd3b7fa72893d667f36c69e202a807e6d533";
   };
   fftools-ffi = {
     version = "9b0d4da0";
@@ -36,8 +36,8 @@
   };
   libplacebo = {
     version = "7.360.1";
-    url = "https://code.videolan.org/videolan/libplacebo/-/archive/v7.360.1/libplacebo-v7.360.1.tar.gz";
-    sha256 = "14c0a99f4b01557ec9826ce6b1d52f6de21be274ba03fd5aab7307f18766dc39";
+    url = "https://github.com/haasn/libplacebo/archive/refs/tags/v7.360.1.tar.gz";
+    sha256 = "d05fdf90bea2f629eaa2d115e909fd356388ac639e54f77b87a018a6d76224bd";
   };
   libogg = {
     version = "1.3.5";

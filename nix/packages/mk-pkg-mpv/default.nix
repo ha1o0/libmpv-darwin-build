@@ -3,6 +3,7 @@
   os ? import ../../utils/default/os.nix,
   arch ? pkgs.callPackage ../../utils/default/arch.nix { },
   variant ? import ../../utils/default/variant.nix,
+  flavor ? import ../../utils/default/flavor.nix,
 }:
 
 let
@@ -33,6 +34,7 @@ let
       os
       arch
       variant
+      flavor
       ;
   };
   nativeFile = callPackage ../../utils/native-file/default.nix { };
@@ -255,7 +257,7 @@ EOF
 in
 
 pkgs.stdenvNoCC.mkDerivation {
-  name = "${pname}-${os}-${arch}-${variant}-${version}";
+  name = "${pname}-${os}-${arch}-${variant}-${flavor}-${version}";
   pname = pname;
   inherit version;
   src = fixedSource;
