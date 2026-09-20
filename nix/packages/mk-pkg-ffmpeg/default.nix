@@ -12,6 +12,7 @@ let
   inherit (packageLock) version;
 
   flavors = import ../../utils/constants/flavors.nix;
+  oses = import ../../utils/constants/oses.nix;
   variants = import ../../utils/constants/variants.nix;
   callPackage = pkgs.lib.callPackageWith {
     inherit
@@ -46,6 +47,9 @@ let
     # patch -p1 <${../../../patches/ffmpeg-fix-hls-mp4-seek.patch}
     patch -p1 <${../../../patches/ffmpeg-fix-ios-hdr-texture.patch}
     patch -p1 <${../../../patches/ffmpeg-fix-dash-base-url-escape.patch}
+    ${pkgs.lib.optionalString (os == oses.macos) ''
+      patch -p1 <${../../../patches/ffmpeg-fix-custom-channel-layout-rematrix.patch}
+    ''}
 
     # Disable Wunguarded-availability-new warning as error in videotoolboxenc.c to support iOS deployment target of 9.0
     sed -i '1i #pragma clang diagnostic ignored "-Wunguarded-availability-new"' libavcodec/videotoolboxenc.c

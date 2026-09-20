@@ -109,6 +109,12 @@ let
       patch -p1 <${../../../patches/mpv-fix-libmpv-gpu-next-color-management.patch}
     ''}
 
+    # The legacy macOS audio variant uses the old mpv branch, which needs the
+    # channel-order fix already present in the native macOS video branch.
+    ${pkgs.lib.optionalString (os == oses.macos && !macosNativeVideo) ''
+      patch -p1 <${../../../patches/mpv-fix-swresample-channel-order.patch}
+    ''}
+
     # 仅在编译 iOS 平台时，应用 CoreAudio 兼容降级补丁
     ${if os == "ios" || os == "iossimulator" then ''
       # 1. 忽略 iOS 上编译 ao_avfoundation.m 产生的 availability 警告
