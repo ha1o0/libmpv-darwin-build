@@ -1,0 +1,184 @@
+diff --git a/audio/chmap_avchannel.c b/audio/chmap_avchannel.c
+index ec961de422..ebf33bd233 100644
+--- a/audio/chmap_avchannel.c
++++ b/audio/chmap_avchannel.c
+@@ -16,6 +16,8 @@
+  */
+
+ #include <libavutil/channel_layout.h>
++#include <libavutil/error.h>
++#include <libavutil/mem.h>
+
+ #include "chmap.h"
+ #include "chmap_avchannel.h"
+@@ -49,3 +51,44 @@ void mp_chmap_to_av_layout(AVChannelLayout *dst, const struct mp_chmap *src)
+         av_channel_layout_from_mask(dst, mp_chmap_to_lavc(src));
+     }
+ }
++
++static int custom_init(AVChannelLayout *dst, int nb_channels)
++{
++#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(58, 37, 100)
++    return av_channel_layout_custom_init(dst, nb_channels);
++#else
++    AVChannelCustom *map = av_calloc(nb_channels, sizeof(*map));
++    if (!map)
++        return AVERROR(ENOMEM);
++    dst->order       = AV_CHANNEL_ORDER_CUSTOM;
++    dst->nb_channels = nb_channels;
++    dst->u.map       = map;
++    return 0;
++#endif
++}
++
++void mp_chmap_to_av_layout_custom(AVChannelLayout *dst,
++                                  const struct mp_chmap *src)
++{
++    *dst = (AVChannelLayout){0};
++
++    if (mp_chmap_is_unknown(src) || src->num <= 0 ||
++        custom_init(dst, src->num) < 0)
++    {
++        dst->order = AV_CHANNEL_ORDER_UNSPEC;
++        dst->nb_channels = src->num;
++        return;
++    }
++
++    // mp_speaker_id values < 64 match the AVChannel enum directly. NA maps to
++    // AV_CHAN_UNUSED. Anything else is unknown.
++    for (int n = 0; n < src->num; n++) {
++        if (src->speaker[n] == MP_SPEAKER_ID_NA) {
++            dst->u.map[n].id = AV_CHAN_UNUSED;
++        } else if (src->speaker[n] < 64) {
++            dst->u.map[n].id = src->speaker[n];
++        } else {
++            dst->u.map[n].id = AV_CHAN_UNKNOWN;
++        }
++    }
++}
+diff --git a/audio/chmap_avchannel.h b/audio/chmap_avchannel.h
+index 84062c49d0..bdd8f0873d 100644
+--- a/audio/chmap_avchannel.h
++++ b/audio/chmap_avchannel.h
+@@ -26,3 +26,8 @@
+ bool mp_chmap_from_av_layout(struct mp_chmap *dst, const AVChannelLayout *src);
+
+ void mp_chmap_to_av_layout(AVChannelLayout *dst, const struct mp_chmap *src);
++
++// Like mp_chmap_to_av_layout(), but always emit AV_CHANNEL_ORDER_CUSTOM for
++// known layouts so that the original channel order is preserved.
++void mp_chmap_to_av_layout_custom(AVChannelLayout *dst,
++                                  const struct mp_chmap *src);
+diff --git a/filters/f_swresample.c b/filters/f_swresample.c
+index 87bf3be6bf..ad2a221861 100644
+--- a/filters/f_swresample.c
++++ b/filters/f_swresample.c
+@@ -44,8 +44,6 @@ struct priv {
+     struct mp_aframe *pre_out_fmt; // format before final conversion
+     struct SwrContext *avrctx_out; // for output channel reordering
+     struct mp_resample_opts *opts; // opts requested by the user
+-    // At least libswresample keeps a pointer around for this:
+-    int reorder_in[MP_NUM_CHANNELS];
+     int reorder_out[MP_NUM_CHANNELS];
+     struct mp_aframe_pool *reorder_buffer;
+     struct mp_aframe_pool *out_pool;
+@@ -109,53 +107,6 @@ static int rate_from_speed(int rate, double speed)
+     return lrint(rate * speed);
+ }
+
+-static const struct mp_chmap fudge_pairs[][2] = {
+-    {MP_CHMAP2(BL,  BR),  MP_CHMAP2(SL,  SR)},
+-    {MP_CHMAP2(SL,  SR),  MP_CHMAP2(BL,  BR)},
+-    {MP_CHMAP2(SDL, SDR), MP_CHMAP2(SL,  SR)},
+-    {MP_CHMAP2(SL,  SR),  MP_CHMAP2(SDL, SDR)},
+-};
+-
+-// Modify out_layout and return the new value. The intention is reducing the
+-// loss libswresample's rematrixing will cause by exchanging similar, but
+-// strictly speaking incompatible channel pairs. For example, 7.1 should be
+-// changed to 7.1(wide) without dropping the SL/SR channels. (We still leave
+-// it to libswresample to create the remix matrix.)
+-static uint64_t fudge_layout_conversion(struct priv *p,
+-                                        uint64_t in, uint64_t out)
+-{
+-    for (int n = 0; n < MP_ARRAY_SIZE(fudge_pairs); n++) {
+-        uint64_t a = mp_chmap_to_lavc(&fudge_pairs[n][0]);
+-        uint64_t b = mp_chmap_to_lavc(&fudge_pairs[n][1]);
+-        if ((in & a) == a && (in & b) == 0 &&
+-            (out & a) == 0 && (out & b) == b)
+-        {
+-            out = (out & ~b) | a;
+-
+-            MP_VERBOSE(p, "Fudge: %s -> %s\n",
+-                       mp_chmap_to_str(&fudge_pairs[n][0]),
+-                       mp_chmap_to_str(&fudge_pairs[n][1]));
+-        }
+-    }
+-    return out;
+-}
+-
+-// mp_chmap_get_reorder() performs:
+-//  to->speaker[n] = from->speaker[src[n]]
+-// but libavresample does:
+-//  to->speaker[dst[n]] = from->speaker[n]
+-static void transpose_order(int *map, int num)
+-{
+-    int nmap[MP_NUM_CHANNELS] = {0};
+-    for (int n = 0; n < num; n++) {
+-        for (int i = 0; i < num; i++) {
+-            if (map[n] == i)
+-                nmap[i] = n;
+-        }
+-    }
+-    memcpy(map, nmap, sizeof(nmap));
+-}
+-
+ static bool configure_lavrr(struct priv *p, bool verbose)
+ {
+     close_lavrr(p);
+@@ -234,9 +185,6 @@ static bool configure_lavrr(struct priv *p, bool verbose)
+         goto error;
+     }
+
+-    mp_chmap_get_reorder(p->reorder_in, &map_in, &in_lavc);
+-    transpose_order(p->reorder_in, map_in.num);
+-
+     if (mp_chmap_equals(&out_lavc, &map_out)) {
+         // No intermediate step required - output new format directly.
+         out_samplefmtp = out_samplefmt;
+@@ -268,14 +216,13 @@ static bool configure_lavrr(struct priv *p, bool verbose)
+     if (map_out.num > out_lavc.num)
+         mp_aframe_set_chmap(p->pool_fmt, &map_out);
+
+-    out_ch_layout = fudge_layout_conversion(p, in_ch_layout, out_ch_layout);
+-
+-    // Real conversion; output is input to avrctx_out.
+     AVChannelLayout in_layout, out_layout;
+-    mp_chmap_to_av_layout(&in_layout, &in_lavc);
++    mp_chmap_to_av_layout_custom(&in_layout, &map_in);
+     mp_chmap_to_av_layout(&out_layout, &out_lavc);
+     av_opt_set_chlayout(p->avrctx, "in_chlayout",  &in_layout, 0);
+     av_opt_set_chlayout(p->avrctx, "out_chlayout", &out_layout, 0);
++    av_channel_layout_uninit(&in_layout);
++    av_channel_layout_uninit(&out_layout);
+     av_opt_set_int(p->avrctx, "in_sample_rate",     p->in_rate, 0);
+     av_opt_set_int(p->avrctx, "out_sample_rate",    p->out_rate, 0);
+     av_opt_set_int(p->avrctx, "in_sample_fmt",      in_samplefmt, 0);
+@@ -285,16 +232,12 @@ static bool configure_lavrr(struct priv *p, bool verbose)
+     av_channel_layout_default(&fake_layout, map_out.num);
+     av_opt_set_chlayout(p->avrctx_out, "in_chlayout", &fake_layout, 0);
+     av_opt_set_chlayout(p->avrctx_out, "out_chlayout", &fake_layout, 0);
++    av_channel_layout_uninit(&fake_layout);
+     av_opt_set_int(p->avrctx_out, "in_sample_fmt",      out_samplefmtp, 0);
+     av_opt_set_int(p->avrctx_out, "out_sample_fmt",     out_samplefmt, 0);
+     av_opt_set_int(p->avrctx_out, "in_sample_rate",     p->out_rate, 0);
+     av_opt_set_int(p->avrctx_out, "out_sample_rate",    p->out_rate, 0);
+
+-    // API has weird requirements, quoting avresample.h:
+-    //  * This function can only be called when the allocated context is not open.
+-    //  * Also, the input channel layout must have already been set.
+-    swr_set_channel_mapping(p->avrctx, p->reorder_in);
+-
+     p->is_resampling = false;
+
+     if (swr_init(p->avrctx) < 0 || swr_init(p->avrctx_out) < 0) {
