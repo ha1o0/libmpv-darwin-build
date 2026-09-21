@@ -115,6 +115,13 @@ let
       patch -p1 <${../../../patches/mpv-fix-swresample-channel-order.patch}
     ''}
 
+    # macOS 27 tightened CoreAudio validation. Use a real AudioUnit channel
+    # map derived from the selected output device instead of passing an
+    # AudioChannelLayout to kAudioOutputUnitProperty_ChannelMap.
+    ${pkgs.lib.optionalString (os == oses.macos) ''
+      patch -p1 <${../../../patches/mpv-fix-coreaudio-channel-map.patch}
+    ''}
+
     # 仅在编译 iOS 平台时，应用 CoreAudio 兼容降级补丁
     ${if os == "ios" || os == "iossimulator" then ''
       # 1. 忽略 iOS 上编译 ao_avfoundation.m 产生的 availability 警告
