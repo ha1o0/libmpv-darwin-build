@@ -1,4 +1,19 @@
 {
+  curl = {
+    version = "8.23.0";
+    url = "https://curl.se/download/curl-8.23.0.tar.gz";
+    sha256 = "e3de77cfa6367083c776a26647fc9f633b538c06c3baa73d931a252ac8f72b49";
+  };
+  nghttp2 = {
+    version = "1.70.0";
+    url = "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.xz";
+    sha256 = "e05cb1388eaca3830aded4ccf20044b6e1ac1a61411dcca11b0437c4285c8bc2";
+  };
+  openssl = {
+    version = "3.5.9";
+    url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz";
+    sha256 = "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a";
+  };
   dav1d = {
     version = "1.2.1";
     url = "https://codeload.github.com/videolan/dav1d/tar.gz/refs/tags/1.2.1";

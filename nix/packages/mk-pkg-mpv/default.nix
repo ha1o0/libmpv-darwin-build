@@ -77,6 +77,7 @@ let
   xctoolchainLipo = callPackage ../../utils/xctoolchain/lipo.nix { };
   xctoolchainOtool = callPackage ../../utils/xctoolchain/otool.nix { };
   ffmpeg = callPackage ../mk-pkg-ffmpeg/default.nix { };
+  curl = callPackage ../mk-pkg-curl/default.nix { };
   uchardet = callPackage ../mk-pkg-uchardet/default.nix { };
   libass = callPackage ../mk-pkg-libass/default.nix { };
   libplacebo = callPackage ../mk-pkg-libplacebo/default.nix { };
@@ -105,7 +106,13 @@ let
     chmod -R 777 $src
 
     cd $src
-    ${pkgs.lib.optionalString (!macosNativeVideo) ''
+    ${if macosNativeVideo then ''
+      patch -p1 <${../../../patches/mpv-macos-curl-0001-honor-explicit-proxy-routing.patch}
+      patch -p1 <${../../../patches/mpv-macos-curl-0002-preserve-network-policy.patch}
+      patch -p1 <${../../../patches/mpv-macos-curl-0003-enable-safe-ffmpeg71-backend.patch}
+      patch -p1 <${../../../patches/mpv-macos-curl-0004-fix-initial-stream-position.patch}
+      patch -p1 <${../../../patches/mpv-macos-curl-0005-inherit-lavf-reconnect-policy.patch}
+    '' else ''
       patch -p1 <${../../../patches/mpv-fix-libmpv-gpu-next-color-management.patch}
     ''}
 
@@ -280,6 +287,7 @@ pkgs.stdenvNoCC.mkDerivation {
   buildInputs =
     [ ffmpeg ]
     ++ pkgs.lib.optionals macosNativeVideo [
+      curl
       libplacebo
       macosTargetPkgs.shaderc.lib
       vulkanHeaders
@@ -497,7 +505,7 @@ pkgs.stdenvNoCC.mkDerivation {
       --native-file ${nativeFile} \
       --cross-file ${mpvCrossFile} \
       --prefix=$out \
-      "''${OPTIONS[@]}" |
+      "''${OPTIONS[@]}" ${pkgs.lib.optionalString macosNativeVideo "-Dlibcurl=enabled "}|
       tee configure.log
   '';
   buildPhase = ''
@@ -517,7 +525,7 @@ pkgs.stdenvNoCC.mkDerivation {
         exit 1
       fi
 
-      for feature in cocoa gl-cocoa vulkan videotoolbox-pl swift; do
+      for feature in cocoa gl-cocoa vulkan videotoolbox-pl swift libcurl; do
         if ! printf '%s\n' "$enabled_features" | grep -Eq "(^|[[:space:]])$feature([[:space:]]|$)"; then
           echo "Required macOS native video feature was not enabled: $feature" >&2
           exit 1

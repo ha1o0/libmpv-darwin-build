@@ -49,6 +49,8 @@ let
     patch -p1 <${../../../patches/ffmpeg-fix-dash-base-url-escape.patch}
     ${pkgs.lib.optionalString (os == oses.macos) ''
       patch -p1 <${../../../patches/ffmpeg-fix-custom-channel-layout-rematrix.patch}
+    ''}${pkgs.lib.optionalString (os == oses.macos && variant == variants.video) ''
+      patch -p1 <${../../../patches/ffmpeg-macos-curl-use-io-close2.patch}
     ''}
 
     # Disable Wunguarded-availability-new warning as error in videotoolboxenc.c to support iOS deployment target of 9.0

@@ -21,6 +21,7 @@ let
   pname = import ../../utils/name/output.nix name;
   oses = import ../../utils/constants/oses.nix;
   archs = import ../../utils/constants/archs.nix;
+  variants = import ../../utils/constants/variants.nix;
   xctoolchainInstallNameTool = callPackage ../../utils/xctoolchain/install-name-tool.nix { };
   xctoolchainLipo = callPackage ../../utils/xctoolchain/lipo.nix { };
   xctoolchainOtool = callPackage ../../utils/xctoolchain/otool.nix { };
@@ -87,6 +88,10 @@ pkgs.stdenvNoCC.mkDerivation {
       echo "Error: Unsupported os ${os}"
       exit 1
     fi
+  '' + pkgs.lib.optionalString (os == oses.macos && variant == variants.video) ''
+    mkdir -p ./build/Mpv.framework/Versions/A/Resources/Licenses
+    cp -R ${libs}/share/licenses/curl-transport \
+      ./build/Mpv.framework/Versions/A/Resources/Licenses/
   '';
   installPhase = ''
     cp -r ./build $out

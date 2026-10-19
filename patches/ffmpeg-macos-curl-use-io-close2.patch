@@ -1,0 +1,40 @@
+From 1a7e802c8f970e76807f08c3d3fb3513ae5a4882 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kacper=20Michaj=C5=82ow?= <kasper93@gmail.com>
+Date: Sat, 17 May 2025 05:50:28 +0200
+Subject: [PATCH] avformat/demux: use io_close2 when closing avfromat
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+It's not valid to call avio_close() on context that has not been open
+with avio_open().
+
+This fixes use of custom IO. (io_open / io_close2 callbacks)
+
+Note that by default io_close2 is set to io_close2_default() which calls
+avio_close(), so default case will work the same as before.
+
+Signed-off-by: Kacper Michajłow <kasper93@gmail.com>
+Reviewed-by: Andreas Rheinhardt <andreas.rheinhardt@outlook.com>
+Signed-off-by: Michael Niedermayer <michael@niedermayer.cc>
+---
+ libavformat/demux.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/libavformat/demux.c b/libavformat/demux.c
+index 2795863567361..ecd4f40da9bcc 100644
+--- a/libavformat/demux.c
++++ b/libavformat/demux.c
+@@ -383,11 +383,10 @@ void avformat_close_input(AVFormatContext **ps)
+         if (ffifmt(s->iformat)->read_close)
+             ffifmt(s->iformat)->read_close(s);
+ 
++    ff_format_io_close(s, &pb);
+     avformat_free_context(s);
+ 
+     *ps = NULL;
+-
+-    avio_close(pb);
+ }
+ 
+ static void force_codec_ids(AVFormatContext *s, AVStream *st)

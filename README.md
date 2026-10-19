@@ -286,6 +286,84 @@ $ nix develop -c make TARGET=mk-out-archive-libs-macos-universal-video-default
 $ tree result
 ```
 
+## macOS video networking
+
+macOS `video` builds statically link curl **8.23.0**, nghttp2 **1.70.0**, and
+OpenSSL **3.5.9** into libmpv for HTTP/1.1 and HTTP/2. Versions and source hashes
+are pinned in [packages.lock.nix](./packages.lock.nix). The transport targets
+macOS **11.0** and uses Apple SecTrust for native certificate trust. FFmpeg stays
+at **7.1.5**; macOS audio and iOS keep their existing network backend.
+
+The curl backend is enabled by default for the fixed FFmpeg 7.1.5 build. Set the
+libmpv option `curl-enabled=no` to return to FFmpeg networking. Compatibility
+patches preserve explicit proxy/direct routing, `network-timeout`, optional
+streamed reconnects, and the existing TLS verification policy. HLS connection
+options are adjusted only while curl is enabled, so disabling it preserves the
+FFmpeg fallback's connection settings. HTTP/2 use depends on the remote server.
+
+Nested HTTP requests honor `reconnect`, `reconnect_streamed`,
+`reconnect_on_network_error`, and `reconnect_delay_max` passed through
+`demuxer-lavf-o`. When any of these keys are present, that request's FFmpeg
+settings take precedence over curl's retry policy; `curl-max-retries` still
+limits retries. A delay limit of `5` permits waits of `0`, `1`, and `3` seconds,
+then stops before the next wait of `7` seconds. Receiving data resets this
+consecutive-failure budget. Requests without these keys keep curl's own policy.
+
+The macOS video FFmpeg build also backports the upstream `io_close2` cleanup fix
+needed by curl-backed HLS streams. Use the complete framework set from the same
+build: pairing the new `Mpv.framework` with an older `Avformat.framework` can
+crash when closing a playlist.
+
+Run the policy tests from this repository with Python **3.9+**, Git, a C compiler,
+and CMake available. `--mpv-source` must point to the **unpatched** mpv source
+selected by `mpvMacosNativeVideo` in the lock file; the tests apply the patches to
+a temporary copy:
+
+```shell
+/usr/bin/python3 -B tests/test_macos_curl_policy.py --mpv-source /path/to/unpatched-mpv
+/usr/bin/python3 -B tests/test_curl_network_policy.py --mpv-source /path/to/unpatched-mpv --curl-prefix /path/to/curl-install
+/usr/bin/python3 -B tests/test_macos_curl_open.py --mpv-source /path/to/unpatched-mpv
+```
+
+The first test checks version boundaries, HLS fallback behavior, and TLS options.
+The second exercises real local HTTP/proxy servers, timeouts, cancellation, and
+retries. Omit `--curl-prefix` to test the host curl instead of the built static
+transport; this does not validate the release library.
+The third deterministically completes a short response before `curl_open`
+returns, checking that the consumer still starts at the correct byte offset.
+
+The request-level reconnect test additionally needs a host-compatible FFmpeg
+installation containing headers and libavutil. It checks the actual parser and
+retry functions with a simulated clock, including cancellation and fallback:
+
+```shell
+/usr/bin/python3 -B tests/test_macos_curl_reconnect.py --mpv-source /path/to/unpatched-mpv --ffmpeg-prefix /path/to/ffmpeg-install
+```
+
+Check real libmpv playback and teardown with Python **3.9+** and the matching
+frameworks installed side by side. The script configures the framework search
+path for each child process. The test runs 19 isolated cases covering HLS EOF,
+open failure, cancellation, recovery after an interrupted segment, and AES-128
+encrypted HLS with curl on, off, and at its default, plus local and HTTP MPEG-TS
+playback. The encrypted cases use the `openssl` executable to encrypt the same
+fixture, including its padding; no separate encrypted media is required. Generate
+a small fixture with an available FFmpeg executable:
+
+```shell
+mkdir -p /tmp/mpv-curl-fixture
+ffmpeg -f lavfi -i testsrc2=size=64x64:rate=25 -t 2 -an -c:v mpeg2video -g 25 -f hls -hls_time 1 -hls_segment_filename /tmp/mpv-curl-fixture/seg%d.ts /tmp/mpv-curl-fixture/index.m3u8
+/usr/bin/python3 -B tests/test_macos_curl_playback.py --library /path/to/frameworks/Mpv.framework/Versions/A/Mpv --fixture /tmp/mpv-curl-fixture
+```
+
+Use a library matching the host architecture. Per-case logs and JSON results
+are retained in the printed artifact directory, including native crashes.
+
+The completed review, validation coverage, and release checks are recorded in
+[the macOS curl build audit](./docs/macos-curl-build-audit.md).
+
+The [CI workflow](./.github/workflows/ci.yaml) runs on pushed tags matching `v*`.
+Pushing the `curl` branch alone does not start a release build.
+
 ## Naming convention
 
 ```
@@ -323,8 +401,8 @@ Inclusion:
     <tr>
       <td rowspan="2"><strong>macOS</strong></td>
       <td>amd64</td>
-      <td rowspan="2"><code>10.9</code></td>
-      <td rowspan="2">Required by <code>uchardet</code></td>
+      <td rowspan="2"><code>10.9</code> (audio), <code>11.0</code> (video)</td>
+      <td rowspan="2">Legacy audio recipe; native macOS video and curl target 11.0</td>
     </tr>
     <tr>
       <td>arm64</td>
@@ -467,6 +545,26 @@ flowchart LR
   and Thunderbird) for detecting the encoding of input text
 
 ## Commercial use
+
+### macOS video transport (all flavors)
+
+| Dependency | Licence | Commercial use |
+| ---------- | ------- | :------------: |
+| curl       | [curl licence (MIT-style)](https://curl.se/docs/copyright.html) | ✅ |
+| nghttp2    | [MIT](https://github.com/nghttp2/nghttp2/blob/v1.70.0/COPYING) | ✅ |
+| OpenSSL    | [Apache 2.0](https://github.com/openssl/openssl/blob/openssl-3.5.9/LICENSE.txt) | ✅ |
+
+These libraries are included statically in macOS video libmpv. Their licence
+texts (`curl.txt`, `nghttp2.txt`, and `openssl.txt`) are included in the release
+artifacts:
+
+- Dylib archives: `share/licenses/curl-transport/`.
+- Frameworks: `Mpv.framework/Versions/A/Resources/Licenses/curl-transport/`.
+  XCFramework archives and the individual Mpv XCFramework zip retain this
+  directory inside the macOS slice of `Mpv.xcframework`.
+
+Retain these licence resources when redistributing libmpv artifacts. The macOS
+video artifact check rejects any missing or empty transport licence.
 
 ### Default, Full flavors
 

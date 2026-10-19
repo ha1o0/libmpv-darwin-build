@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ARTIFACT_DIR=${1:-result}
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
@@ -24,6 +25,8 @@ for archive in "${archives[@]}"; do
         echo "Archive is empty: ${archive}" >&2
         exit 1
     fi
+
+    python3 "${SCRIPT_DIR}/verify-macos-curl-artifacts.py" "${package_dir}"
 
     for framework in Mpv Placebo Vulkan MoltenVK Glslang; do
         if [ ! -d "${package_dir}/${framework}.xcframework" ]; then

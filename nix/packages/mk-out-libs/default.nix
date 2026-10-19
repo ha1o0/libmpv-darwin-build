@@ -45,6 +45,7 @@ if arch != archs.universal then
     xctoolchainInstallNameTool = callPackage ../../utils/xctoolchain/install-name-tool.nix { };
 
     mpv = callPackage ../mk-pkg-mpv/default.nix { };
+    curl = callPackage ../mk-pkg-curl/default.nix { };
     moltenvk = callPackage ../mk-pkg-moltenvk/default.nix { };
     libplacebo = callPackage ../mk-pkg-libplacebo/default.nix { };
     ffmpeg = callPackage ../mk-pkg-ffmpeg/default.nix { };
@@ -164,6 +165,24 @@ if arch != archs.universal then
       done
 
       ${pkgs.lib.optionalString (os == "macos" && variant == variants.video) ''
+        # Static transport libraries have no separate framework in which to
+        # carry their notices. Keep them with every macOS video distribution.
+        mkdir -p ./build/share/licenses
+        cp -R ${curl}/share/licenses/curl-transport ./build/share/licenses/
+
+        # Build-machine search paths have no meaning in the distributed
+        # frameworks. Keep relocatable/system rpaths, but remove Nix store ones.
+        for file in ./build/lib*.dylib; do
+          while IFS= read -r rpath; do
+            case "$rpath" in
+              /nix/store/*) install_name_tool -delete_rpath "$rpath" "$file" ;;
+            esac
+          done < <(otool -l "$file" | awk '
+            $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+            in_rpath && $1 == "path" { print $2; in_rpath = 0 }
+          ')
+        done
+
         # The Vulkan loader resolves this path relative to the manifest. Keep
         # the ICD relocatable so release artifacts never refer to /nix/store.
         mkdir -p ./build/vulkan/icd.d
@@ -243,6 +262,8 @@ else
 
       ${pkgs.lib.optionalString (os == "macos" && variant == variants.video) ''
         cp -R ''${deps[0]}/vulkan ./build/
+        mkdir -p ./build/share/licenses
+        cp -R ''${deps[0]}/share/licenses/curl-transport ./build/share/licenses/
       ''}
     '';
     installPhase = ''
