@@ -103,6 +103,15 @@ def check_curl_licenses(framework_version):
             raise ValueError("Missing or empty static transport licence: {}".format(license_file))
 
 
+def check_mkv_startup_slice(data, label):
+    # These are the option-table names, without the demuxer-mkv prefix added
+    # by mpv's configuration groups. Require them in both packaged CPU slices.
+    for option in (b"skip-tags", b"defer-cues"):
+        if option + b"\0" not in data:
+            raise ValueError("{}: missing MKV startup option demuxer-mkv-{}".format(
+                label, option.decode("ascii")))
+
+
 def verify_package(package):
     binaries = sorted(
         framework / "Versions" / "A" / framework.stem
@@ -126,8 +135,10 @@ def verify_package(package):
                 if is_mpv:
                     thin = Path(temp) / ("Mpv-" + architecture)
                     run("lipo", str(binary), "-thin", architecture, "-output", str(thin))
-                    check_curl_slice(thin.read_bytes(), label)
-    print("Verified static curl, HTTP/2, OpenSSL, Apple SecTrust and bundled licences: {}".format(package))
+                    data = thin.read_bytes()
+                    check_curl_slice(data, label)
+                    check_mkv_startup_slice(data, label)
+    print("Verified static curl, HTTP/2, OpenSSL, Apple SecTrust, MKV startup options and bundled licences: {}".format(package))
 
 
 def main():

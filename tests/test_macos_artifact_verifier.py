@@ -112,6 +112,13 @@ class ArtifactVerifierTests(unittest.TestCase):
         verifier.check_curl_slice(
             b"mpv_curl_avio\0HTTP2\0MultiSSL\0AppleSecTrust\0OpenSSL\0", "fixture")
 
+    def test_both_mkv_startup_options_are_required(self):
+        verifier.check_mkv_startup_slice(b"skip-tags\0defer-cues\0", "fixture")
+        for present, missing in ((b"skip-tags\0", "defer-cues"),
+                                 (b"defer-cues\0", "skip-tags")):
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, missing):
+                verifier.check_mkv_startup_slice(present, "fixture")
+
     def test_all_three_transport_licenses_are_accepted(self):
         with tempfile.TemporaryDirectory() as temp:
             binary = make_mpv_package(Path(temp))
@@ -156,7 +163,7 @@ class ArtifactVerifierTests(unittest.TestCase):
                 if args[0] == "otool":
                     return commands()
                 if args[0] == "lipo" and args[2] == "-thin":
-                    data = b"mpv_curl_avio\0SSL\0AppleSecTrust\0OpenSSL\0"
+                    data = b"mpv_curl_avio\0SSL\0AppleSecTrust\0OpenSSL\0skip-tags\0defer-cues\0"
                     if args[3] == "arm64":
                         data += b"HTTP2\0"
                     Path(args[5]).write_bytes(data)
@@ -165,6 +172,28 @@ class ArtifactVerifierTests(unittest.TestCase):
 
             with patch.object(verifier, "run", side_effect=fake_run):
                 with self.assertRaisesRegex(ValueError, r"x86_64.*HTTP/2"):
+                    verifier.verify_package(package)
+
+    def test_mkv_startup_options_on_only_one_cpu_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            package = Path(temp)
+            make_mpv_package(package)
+
+            def fake_run(*args):
+                if args[:2] == ("lipo", "-archs"):
+                    return "x86_64 arm64\n"
+                if args[0] == "otool":
+                    return commands()
+                if args[0] == "lipo" and args[2] == "-thin":
+                    data = b"mpv_curl_avio\0HTTP2\0AppleSecTrust\0OpenSSL\0skip-tags\0"
+                    if args[3] == "arm64":
+                        data += b"defer-cues\0"
+                    Path(args[5]).write_bytes(data)
+                    return ""
+                self.fail("Unexpected command: {}".format(args))
+
+            with patch.object(verifier, "run", side_effect=fake_run):
+                with self.assertRaisesRegex(ValueError, r"x86_64.*defer-cues"):
                     verifier.verify_package(package)
 
 

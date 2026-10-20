@@ -100,9 +100,11 @@
     sha256 = "8ff7f966c928a017936588691c5f7e3ec9f44f13d9e0ad6e4b8c9f8a647e7d19";
   };
   mpvMacosNativeVideo = {
-    version = "0.41.0-git-f21c602c";
-    url = "https://github.com/ha1o0/mpv/archive/f21c602c3b379734c8bb5ccdc437e52514d2288c.tar.gz";
-    sha256 = "96c35ddf818542c225f28b8387eafafe76e8be25bfd77dc6d69d1016f8f4e134";
+    repository = "https://github.com/ha1o0/mpv.git";
+    branch = "zcopy";
+    version = "zcopy-ec8118be155f";
+    url = "https://github.com/ha1o0/mpv/archive/ec8118be155f9b10390efb5f81e7b895796d2b36.tar.gz";
+    sha256 = "dfee96f962c6f798c2e7fc77b6f2a44bb2aad4836e231566e910a4a9240fedc0";
   };
   moltenvk = {
     version = "1.3.0";

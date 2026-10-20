@@ -364,6 +364,24 @@ The completed review, validation coverage, and release checks are recorded in
 The [CI workflow](./.github/workflows/ci.yaml) runs on pushed tags matching `v*`.
 Pushing the `curl` branch alone does not start a release build.
 
+macOS video follows the `zcopy` branch configured under `mpvMacosNativeVideo`
+in `packages.lock.nix`. Before every release build, CI resolves that branch to
+one commit, downloads its archive and updates the commit URL and SHA-256 used by
+Nix. Shared mpv changes therefore need no manual source-lock update. The chosen
+commit and checksum appear in the workflow summary. The existing curl patches
+and release checks must still pass for the selected source.
+
+Direct local Nix builds use the checked-in snapshot. To refresh it from the
+same tracked branch before a local build, run:
+
+```shell
+/usr/bin/python3 .github/scripts/update-macos-mpv-source.py
+```
+
+The macOS release verifier requires both `demuxer-mkv-skip-tags` and
+`demuxer-mkv-defer-cues` in each CPU slice. Their library defaults stay disabled;
+the application decides when to enable these file-local startup policies.
+
 ## Naming convention
 
 ```

@@ -57,6 +57,9 @@ jobs:
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
+      - name: Resolve macOS video mpv from tracked branch
+        run: python3 .github/scripts/update-macos-mpv-source.py
+
       # See ${workspace}/Makefile
       - name: Build
         env:

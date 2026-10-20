@@ -1,8 +1,42 @@
 # macOS video curl build audit
 
-Reviewed on 2026-10-19. The change applies to macOS `video` builds on the `curl`
-branch. The pinned native-video mpv source remains
-`f21c602c3b379734c8bb5ccdc437e52514d2288c`, and FFmpeg remains **7.1.5**.
+Reviewed on 2026-10-19; source selection corrected on 2026-10-20. The change
+applies to macOS `video` builds on the `curl` branch. The native-video mpv source
+tracks `zcopy`. Release CI resolves its current commit and archive checksum
+before Nix builds; the checked-in snapshot is
+`ec8118be155f9b10390efb5f81e7b895796d2b36`. FFmpeg remains **7.1.5**.
+
+## 2026-10-20 source correction
+
+The published v2.22.1 still selected `f21c602c3b379734c8bb5ccdc437e52514d2288c`.
+Loading that release confirms curl's reconnect options are present, while
+`demuxer-mkv-skip-tags` and `demuxer-mkv-defer-cues` are absent. Retagging the
+same build recipe cannot add those options.
+
+The updated snapshot adds only `ec8118be` (MKV header policies, documentation and
+tests) to that source. Keep the existing five curl patches, FFmpeg 7.1.5 and
+the macOS render ABI unchanged. The two MKV options remain disabled by default
+in libmpv; Bota enables them per file for eligible Emby/Jellyfin playback and
+keeps its startup-optimization preference enabled by default.
+
+The existing release verifier now rejects either CPU slice if either MKV
+option is missing. The new source-resolution step follows the configured
+`repository` and `branch` automatically for each release, so subsequent shared
+mpv changes need no manual lock update. Each build still uses an immutable
+commit URL and matching archive checksum; failed resolution stops the build.
+Publish a fresh version, such as v2.22.2, after committing the source tracking
+and verifier changes. Do not replace v2.22.1 assets: media-kit
+pins both the archive and individual SwiftPM checksums. The full release must
+be rebuilt by the GitHub runner; the earlier validation table below describes
+the pre-correction native build.
+
+Source-tracking validation on 2026-10-20 passed four resolver tests and twenty
+artifact-verifier tests. The resolver fetched `zcopy` and calculated the same
+archive checksum as the checked-in snapshot. All five existing curl patches
+apply to that source; the C policy, real HTTP/proxy retry tests, and twelve
+consumer-position cases passed. The new verifier correctly rejects both CPU
+slices of the existing v2.22.1 because the MKV options are missing. A full
+native build of the newly selected source remains for the release runner.
 
 ## Completed implementation
 
