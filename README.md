@@ -286,6 +286,50 @@ $ nix develop -c make TARGET=mk-out-archive-libs-macos-universal-video-default
 $ tree result
 ```
 
+## macOS video MP4 read policy
+
+macOS `video` builds include the same bounded MP4 packet read policy as the
+Windows build. The companion FFmpeg patch is ported to the pinned **7.1.5**
+release; no dependency version or source hash changes. iOS and macOS audio
+builds retain their existing behavior.
+
+The default `demuxer-lavf-mp4-read-strategy=auto` opts in after stream probing,
+only for seekable HTTP(S) MOV/MP4 with a finite duration. The scheduler activates
+when pending selected audio/video samples are at least **1 MiB** apart, and
+prefers physical file order within a fixed **5 second** DTS window and an
+**8 MiB** logical preload budget, further limited to a quarter of mpv's forward
+demuxer cache. The budget accumulates across packets, including subtitles.
+Mandatory catch-up data and a single large packet can exceed this budget;
+mpv's existing cache limit still applies.
+
+MKV, HLS, ISO, fragmented/live MP4, non-seekable inputs, external track IO,
+stream groups/IAMF, invalid timestamps and very small caches keep legacy
+ordering. Seeking or a change in selected tracks resets the scheduling window.
+Packet payloads, DTS/PTS, decoding, rendering and network routing are unchanged.
+Explicit low-level FFmpeg interleave options take precedence. Set
+`demuxer-lavf-mp4-read-strategy=legacy` to disable automatic opt-in.
+
+The implementation follows the design precedent of
+[VLC's bounded MP4 preload](https://github.com/videolan/vlc/blob/master/modules/demux/mp4/mp4.c).
+It is independent code, not a port of Hills or VLC. Implementation provenance,
+the version-specific patch changes and validation limits are documented in
+[the macOS MP4 port notes](./docs/macos-mp4-read-policy.md).
+
+Run the policy regression with Python **3.9+**, Git, `patch`, CMake and a C11
+compiler. Both source directories must be unpatched and match the lock file;
+the script applies the macOS video patch stack to temporary copies:
+
+```shell
+python3 -B tests/test_macos_mp4_policy.py --ffmpeg-source /path/to/ffmpeg-7.1.5 --mpv-source /path/to/unpatched-mpv
+```
+
+Patch inputs are part of the Nix derivations, so this change rebuilds FFmpeg
+and mpv automatically while reusing unchanged dependency derivations. Use the
+complete new framework set, including **Mpv and Avformat**, from the same build.
+Replacing only `Mpv.framework` leaves the FFmpeg extension unavailable and
+retains legacy packet ordering. Commit the new patch files before building
+from the Git-backed Nix flake.
+
 ## macOS video networking
 
 macOS `video` builds statically link curl **8.23.0**, nghttp2 **1.70.0**, and

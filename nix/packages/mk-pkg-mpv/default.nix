@@ -112,6 +112,7 @@ let
       patch -p1 <${../../../patches/mpv-macos-curl-0003-enable-safe-ffmpeg71-backend.patch}
       patch -p1 <${../../../patches/mpv-macos-curl-0004-fix-initial-stream-position.patch}
       patch -p1 <${../../../patches/mpv-macos-curl-0005-inherit-lavf-reconnect-policy.patch}
+      patch -p1 <${../../../patches/mpv-macos-mp4-bounded-interleave.patch}
     '' else ''
       patch -p1 <${../../../patches/mpv-fix-libmpv-gpu-next-color-management.patch}
     ''}
