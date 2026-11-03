@@ -70,6 +70,10 @@ video_common_options = [
     '--enable-libxml2', # dash support
     '--enable-videotoolbox',
     '--enable-libdav1d', # av1 support
+    # Cached libmpv snapshots remux existing packets into a local NUT clip.
+    # Both directions are required even in video builds without encoders.
+    '--enable-muxer=nut',
+    '--enable-demuxer=nut',
 ]
 
 # https://github.com/media-kit/libmpv-android-audio-build/blob/260666c0fef8c154971b5faf3f78da27c2bf2c40/buildscripts/flavors/default.sh
