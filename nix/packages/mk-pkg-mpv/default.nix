@@ -107,6 +107,13 @@ let
 
     cd $src
     ${if macosNativeVideo then ''
+      # Fail before building a stale pinned source that cannot honor the app's
+      # independent secondary appearance. CI resolves the tracked zcopy branch.
+      if ! grep -Fq '"secondary-sub-style"' options/options.c ||
+         ! grep -Fq '"secondary-sub-hdr-peak"' video/out/vo_gpu_next.c; then
+        echo "mpv source is missing independent secondary subtitles; update the macOS video source lock" >&2
+        exit 1
+      fi
       patch -p1 <${../../../patches/mpv-macos-curl-0001-honor-explicit-proxy-routing.patch}
       patch -p1 <${../../../patches/mpv-macos-curl-0002-preserve-network-policy.patch}
       patch -p1 <${../../../patches/mpv-macos-curl-0003-enable-safe-ffmpeg71-backend.patch}

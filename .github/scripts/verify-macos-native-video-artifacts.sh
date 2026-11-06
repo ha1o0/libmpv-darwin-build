@@ -28,6 +28,7 @@ for archive in "${archives[@]}"; do
 
     python3 "${SCRIPT_DIR}/verify-macos-curl-artifacts.py" "${package_dir}"
     python3 "${SCRIPT_DIR}/verify-macos-cache-preview-artifacts.py" "${package_dir}"
+    python3 "${SCRIPT_DIR}/verify-macos-secondary-subtitle-artifacts.py" "${package_dir}"
 
     for framework in Mpv Placebo Vulkan MoltenVK Glslang; do
         if [ ! -d "${package_dir}/${framework}.xcframework" ]; then

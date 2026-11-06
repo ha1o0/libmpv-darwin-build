@@ -431,6 +431,22 @@ The macOS release verifier requires both `demuxer-mkv-skip-tags` and
 `demuxer-mkv-defer-cues` in each CPU slice. Their library defaults stay disabled;
 the application decides when to enable these file-local startup policies.
 
+## Independent secondary subtitles
+
+macOS video builds require the tracked mpv `zcopy` source to include
+`secondary-sub-style=independent`, separate `secondary-sub-*` text appearance,
+and separate text/image subtitle HDR peaks. Commit and push the mpv changes
+before starting a release build; CI resolves that remote branch. For direct
+local Nix builds, refresh the source lock with the command above first.
+
+The recipe rejects stale source before compilation. The release verifier loads
+the packaged libmpv on the runner's native CPU and checks that the independent
+style options and separate HDR values are registered. This probe does not
+measure HDR output brightness. For SRT/ASS pixel rendering regressions, run
+`test/secondary_subtitle_style.py --library /path/to/libmpv` from the mpv source.
+Existing clients retain shared text appearance until they opt in. iOS and macOS
+audio recipes retain their existing source selection.
+
 ## Naming convention
 
 ```
