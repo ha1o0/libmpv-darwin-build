@@ -8,6 +8,9 @@ add automatic builds for branch pushes or pull requests.
 
 The full matrix has been built locally with Xcode 27.2; see the
 [validation results and timing limitations](local-build-validation.md).
+CI now defaults to the four media-kit `full` XCFramework bundles and their
+SwiftPM ZIPs. Tags upload these files directly to Releases, without a duplicate
+Actions artifact. See [artifact selection](release-artifacts.md) for details.
 
 ## Prepare the Mac
 
@@ -95,13 +98,13 @@ bash .github/scripts/verify-macos-native-video-artifacts.sh result
 ```
 
 After the workflow change is on `my-sync-19`, use the already registered `ci`
-workflow to run a full validation on that branch, with GitHub CLI authenticated:
+workflow to validate the four consumer bundles on that branch, with GitHub CLI authenticated:
 
 ```sh
-gh workflow run ci.yaml --ref my-sync-19 -f runner=self-hosted
+gh workflow run ci.yaml --ref my-sync-19 -f runner=self-hosted -f artifacts=media-kit
 ```
 
-This runs the full build and existing macOS artifact checks, and uploads
+This builds the selected bundles, runs the existing macOS artifact checks, and uploads
 artifacts without publishing a release. If using the **Run workflow** UI,
 select `my-sync-19`, not `main`; the UI button's availability depends on the
 workflow on the default branch. The explicit CLI ref avoids selecting the
@@ -119,6 +122,10 @@ recovery path before enabling local releases:
 gh workflow run ci.yaml --ref my-sync-19 -f runner=github-hosted
 ```
 
+To validate the original complete matrix, add `-f artifacts=all`. Direct local
+`make` still defaults to that complete matrix; pass `TARGET=mk-out-media-kit`
+to match the normal CI release set.
+
 The runner retains `/nix/store` between builds. Avoid clearing that store after
 each run; unchanged dependencies can be reused. The first build still downloads
 dependencies and compiles missing outputs. Use a distinct, versioned Xcode path
@@ -135,6 +142,7 @@ In **Settings → Secrets and variables → Actions → Variables**, add:
 | `LIBMPV_XCODE_PATH` | App selected by `xcode-select` | Optional local Xcode app path, e.g. `/Applications/Xcode.app`; does not affect GitHub-hosted builds. |
 | `LIBMPV_MAX_JOBS` | `2` | Maximum independent Nix builds running at once on the Mac. |
 | `LIBMPV_BUILD_CORES` | `6` | Parallel compilation jobs per Nix build on the Mac. |
+| `LIBMPV_ARTIFACT_PROFILE` | `media-kit` | Build the four consumer bundles, or set `all` for the original complete matrix on tag pushes. Manual runs use their `artifacts` input. |
 
 The `2 × 6` settings are a starting point for a 12-core, 24 GB Mac, not a measured
 optimum. Adjust them after comparing build times and memory pressure. Increasing
@@ -142,8 +150,8 @@ both values can oversubscribe the CPU and memory. Hosted runner settings are
 unchanged.
 
 Push `v*` tags from `my-sync-19` as before. A tag containing this workflow will
-build on the Mac and publish the same release assets. Older tags retain their
-original workflow.
+build on the Mac and publish the selected release assets. Filenames and contents
+of the selected bundles are unchanged. Older tags retain their original workflow.
 
 ## Recover using GitHub-hosted builds
 
@@ -156,12 +164,13 @@ If the Mac is offline or a local build fails:
    cache, Xcode path, build, and release steps. With GitHub CLI authenticated:
 
    ```sh
-   gh workflow run ci.yaml --ref YOUR_TAG -f runner=github-hosted
+   gh workflow run ci.yaml --ref YOUR_TAG -f runner=github-hosted -f artifacts=media-kit
    ```
 
    Selecting a branch instead of the tag only builds artifacts; it does not
    publish that tag's release. Re-running the failed job without changing the
    routing variable can select the local runner again.
+   If the original release used `all`, use `-f artifacts=all` for recovery too.
 3. Set `LIBMPV_TAG_RUNNER` to `github-hosted` or delete it to keep subsequent tag
    pushes on GitHub. No code revert or tag recreation is required.
 

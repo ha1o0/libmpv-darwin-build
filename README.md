@@ -453,6 +453,11 @@ GitHub-hosted builds remain the default. To use an Apple Silicon Mac as an
 optional self-hosted runner while preserving hosted builds for recovery, follow
 [the local runner setup and rollback guide](docs/self-hosted-runner.md).
 
+CI builds the four `full` XCFramework bundles used by media-kit by default,
+including their SwiftPM ZIPs. Tag runs publish directly to Releases, while
+manual branch runs upload Actions artifacts. See [release artifact selection](docs/release-artifacts.md)
+for the consumer audit and the optional complete build matrix.
+
 ## Naming convention
 
 ```

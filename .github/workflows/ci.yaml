@@ -13,6 +13,13 @@ on:
         options:
           - github-hosted
           - self-hosted
+      artifacts:
+        description: Artifact set (media-kit uses four full-flavor XCFramework bundles)
+        type: choice
+        default: media-kit
+        options:
+          - media-kit
+          - all
 
 jobs:
   ci:
@@ -107,6 +114,22 @@ jobs:
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
+      - name: Select artifact set
+        id: artifact_set
+        env:
+          ARTIFACT_PROFILE: ${{ inputs.artifacts || vars.LIBMPV_ARTIFACT_PROFILE || 'media-kit' }}
+        run: |
+          case "${ARTIFACT_PROFILE}" in
+            media-kit) TARGET=mk-out-media-kit ;;
+            all) TARGET= ;;
+            *)
+              echo "::error::LIBMPV_ARTIFACT_PROFILE must be media-kit or all."
+              exit 1
+              ;;
+          esac
+          echo "target=${TARGET}" >> "$GITHUB_OUTPUT"
+          echo "Artifact set: ${ARTIFACT_PROFILE}" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Resolve macOS video mpv from tracked branch
         run: python3 .github/scripts/update-macos-mpv-source.py
 
@@ -115,6 +138,7 @@ jobs:
         env:
           XCODE_PATH: ${{ steps.xcode_path.outputs.xcode_path }}
           VERSION: ${{ steps.version.outputs.version }}
+          TARGET: ${{ steps.artifact_set.outputs.target }}
           LOCAL_MAX_JOBS: ${{ vars.LIBMPV_MAX_JOBS || '2' }}
           LOCAL_BUILD_CORES: ${{ vars.LIBMPV_BUILD_CORES || '6' }}
         run: |
@@ -125,12 +149,15 @@ jobs:
             fi
             export NIX_CONFIG="${NIX_CONFIG:-}"$'\n'"max-jobs = ${LOCAL_MAX_JOBS}"$'\n'"cores = ${LOCAL_BUILD_CORES}"
           fi
-          nix develop -c make "XCODE_PATH=${XCODE_PATH}" "VERSION=${VERSION}"
+          nix develop -c make "XCODE_PATH=${XCODE_PATH}" "VERSION=${VERSION}" "TARGET=${TARGET}"
 
       - name: Verify macOS native video artifacts
         run: bash .github/scripts/verify-macos-native-video-artifacts.sh result
 
       - name: Upload artifacts
+        # Tags publish directly to Releases below; avoid uploading the same
+        # archives twice. Branch validation runs still provide downloadable files.
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v7
         with:
           if-no-files-found: error
