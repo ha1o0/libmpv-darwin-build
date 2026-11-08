@@ -45,6 +45,9 @@ storage and again as individual GitHub Release assets. Now:
 - **Tag run:** upload selected outputs to the Release only.
 - **Manual branch run:** upload selected outputs as an Actions artifact; no Release.
 
+Self-hosted releases upload files sequentially (`preserve_order: true`) and
+have a 30-minute Release-step timeout. Hosted runners retain concurrent uploads.
+
 This applies to both local and GitHub-hosted runners. Files still need to upload
 from the Mac to GitHub Releases because the consumer downloads them there.
 Existing releases and already-running workflows are not modified by this change.
@@ -91,6 +94,27 @@ For a hosted recovery run on a tag, pass the same `artifacts` profile used for
 that release. Cancel a pending local attempt before starting another publisher.
 Choose the profile before creating a release; rerunning with a smaller profile
 does not delete any extra assets already published on that tag.
+
+## Recover a partial upload
+
+A failed Release step can leave a draft with some assets already uploaded.
+Check the draft and compare its file names, sizes, and SHA-256 digests with the
+completed build outputs before publishing. Missing files can be uploaded from
+the same build; do not mix artifacts from separately resolved source revisions.
+
+The `v2.26.1` attempt on November 9, 2026 started 71 uploads together. One
+connection timed out after ten seconds, while other uploads continued for
+another thirteen minutes. The final draft contained 68 assets. This motivated
+sequential uploading on self-hosted runners; it is a mitigation for local
+connection pressure, not a guarantee against all network failures.
+
+Re-running an old tag still uses that tag's workflow, including its old upload
+policy. A workflow fix must be included in a later tag to affect automatic
+releases. Do not recreate an existing tag just to retry uploading. The local
+build outputs remain under the runner checkout's `result` symlink; preserve
+the resolved Nix output path before starting another job if a manual repair
+is needed. Completing a draft manually does not change the failed Actions
+run's status.
 
 ## Validation of the compact profile
 

@@ -82,6 +82,13 @@ actual proxy endpoint for local commands and the runner service; the workflow
 does not hardcode a proxy for other machines. Confirm `git ls-remote` works
 from the build account before starting a cold build.
 
+Release assets use `uploads.github.com`, separately from the API and Git
+domains. If the build succeeds but publishing fails with a connection timeout,
+check that host from the runner's environment too. macOS system proxy settings
+are not automatically inherited by the runner: configure `http_proxy` and
+`https_proxy` in the runner's `.env` if needed, then restart the idle runner.
+Never restart a runner while it is executing a job.
+
 ## Validate before enabling tag builds
 
 First build one representative target in a clean checkout. The existing
@@ -152,6 +159,10 @@ unchanged.
 Push `v*` tags from `my-sync-19` as before. A tag containing this workflow will
 build on the Mac and publish the selected release assets. Filenames and contents
 of the selected bundles are unchanged. Older tags retain their original workflow.
+
+Local releases upload one file at a time to avoid saturating the Mac's network
+connection. Their Release step has a 30-minute timeout. GitHub-hosted releases
+retain concurrent uploads and the normal job time budget.
 
 ## Recover using GitHub-hosted builds
 

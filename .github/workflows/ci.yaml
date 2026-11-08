@@ -168,7 +168,11 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/')
+        timeout-minutes: ${{ runner.environment == 'self-hosted' && 30 || 360 }}
         with:
+          # The action otherwise starts every asset upload at once. A local
+          # uplink can time out when all 71 uploads compete for connections.
+          preserve_order: ${{ runner.environment == 'self-hosted' }}
           fail_on_unmatched_files: true
           files: |
             result/*.tar.gz
