@@ -159,6 +159,16 @@ if arch != archs.universal then
       for file in ./build/lib*.dylib; do
         deps=$(otool -L $file | tail -n +3 | sed -n 's|.*\(@rpath/[^ ]*\).*|\1|p')
         for dep in $deps; do
+          # Xcode 27 redirects CoreMedia's C imports to the Swift overlay when
+          # targeting older OS versions. FFmpeg only uses the C API; keep it
+          # linked to CoreMedia instead of packaging a nonexistent Swift framework.
+          if [[ "$dep" == "@rpath/libswiftCoreMedia.dylib" ]] &&
+             [[ "$file" == ./build/libav*.dylib || "$file" == ./build/libsw*.dylib ]]; then
+            install_name_tool -change "$dep" \
+              /System/Library/Frameworks/CoreMedia.framework/${if os == "macos" then "Versions/A/" else ""}CoreMedia \
+              "$file"
+            continue
+          fi
           name=$(echo $dep | sed -n 's|@rpath/\(lib[^.]*\).*|\1.dylib|p')
           install_name_tool -change $dep @rpath/$name $file
         done
