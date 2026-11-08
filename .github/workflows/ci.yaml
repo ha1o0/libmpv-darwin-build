@@ -4,12 +4,26 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Build machine (GitHub-hosted is the recovery option)
+        type: choice
+        default: github-hosted
+        options:
+          - github-hosted
+          - self-hosted
 
 jobs:
   ci:
     name: ci
     # https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md
-    runs-on: macos-15
+    # Tag builds stay on GitHub unless explicitly opted in. Manual runs
+    # always honor the selected runner, including on tags.
+    runs-on: >-
+      ${{ ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && vars.LIBMPV_TAG_RUNNER == 'self-hosted') ||
+           (github.event_name == 'workflow_dispatch' && inputs.runner == 'self-hosted')) &&
+          fromJSON('["self-hosted", "macOS", "ARM64", "libmpv-builder"]') || 'macos-15' }}
     permissions:
       contents: write
     steps:
@@ -22,7 +36,22 @@ jobs:
 
       - uses: actions/checkout@v6
 
+      - name: Prepare self-hosted Nix
+        if: runner.environment == 'self-hosted'
+        run: |
+          # launchd services may not inherit the interactive shell's Nix PATH.
+          NIX_BIN=/nix/var/nix/profiles/default/bin
+          if command -v nix >/dev/null 2>&1; then
+            dirname "$(command -v nix)" >> "$GITHUB_PATH"
+          elif [[ -x "${NIX_BIN}/nix" ]]; then
+            echo "${NIX_BIN}" >> "$GITHUB_PATH"
+          else
+            echo "::error::Install Nix on this runner first; see docs/self-hosted-runner.md."
+            exit 1
+          fi
+
       - uses: DeterminateSystems/nix-installer-action@v22
+        if: runner.environment != 'self-hosted'
         with:
           extra-conf: |
             sandbox = true
@@ -35,18 +64,39 @@ jobs:
         run: nix config show
 
       - uses: DeterminateSystems/magic-nix-cache-action@v13
+        if: runner.environment != 'self-hosted'
         with:
           use-flakehub: false
 
       # See ${workspace}/nix/overlays/xcode.nix
       - name: Xcode path
         id: xcode_path
+        env:
+          LOCAL_XCODE_PATH: ${{ vars.LIBMPV_XCODE_PATH }}
         run: |
-          XCODE_PATH=$(realpath /Applications/Xcode_16.1.0.app)
+          XCODE_PATH=/Applications/Xcode_16.1.0.app
+          if [[ "${RUNNER_ENVIRONMENT}" == self-hosted ]]; then
+            if [[ -n "${LOCAL_XCODE_PATH}" ]]; then
+              XCODE_PATH="${LOCAL_XCODE_PATH}"
+            else
+              SELECTED_DEVELOPER_DIR=$(xcode-select --print-path)
+              if [[ "${SELECTED_DEVELOPER_DIR}" != */Contents/Developer ]]; then
+                echo "::error::Select a full Xcode app or set LIBMPV_XCODE_PATH; Command Line Tools alone are insufficient."
+                exit 1
+              fi
+              XCODE_PATH="${SELECTED_DEVELOPER_DIR%/Contents/Developer}"
+            fi
+          fi
+          if [[ ! -x "${XCODE_PATH}/Contents/Developer/usr/bin/xcodebuild" ]]; then
+            echo "::error::Xcode was not found at ${XCODE_PATH}; see docs/self-hosted-runner.md."
+            exit 1
+          fi
+          XCODE_PATH=$(realpath "${XCODE_PATH}")
 
-          ${XCODE_PATH}/Contents/Developer/usr/bin/xcodebuild -version
+          XCODE_VERSION=$("${XCODE_PATH}/Contents/Developer/usr/bin/xcodebuild" -version)
+          printf '%s\n' "${XCODE_VERSION}"
 
-          echo "xcode_path=${XCODE_PATH}" >> $GITHUB_OUTPUT
+          echo "xcode_path=${XCODE_PATH}" >> "$GITHUB_OUTPUT"
 
       - name: Build version
         id: version
@@ -65,8 +115,17 @@ jobs:
         env:
           XCODE_PATH: ${{ steps.xcode_path.outputs.xcode_path }}
           VERSION: ${{ steps.version.outputs.version }}
+          LOCAL_MAX_JOBS: ${{ vars.LIBMPV_MAX_JOBS || '2' }}
+          LOCAL_BUILD_CORES: ${{ vars.LIBMPV_BUILD_CORES || '6' }}
         run: |
-          nix develop -c make XCODE_PATH=${XCODE_PATH} VERSION=${VERSION}
+          if [[ "${RUNNER_ENVIRONMENT}" == self-hosted ]]; then
+            if [[ ! "${LOCAL_MAX_JOBS}" =~ ^[1-9][0-9]*$ || ! "${LOCAL_BUILD_CORES}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::LIBMPV_MAX_JOBS and LIBMPV_BUILD_CORES must be positive integers."
+              exit 1
+            fi
+            export NIX_CONFIG="${NIX_CONFIG:-}"$'\n'"max-jobs = ${LOCAL_MAX_JOBS}"$'\n'"cores = ${LOCAL_BUILD_CORES}"
+          fi
+          nix develop -c make "XCODE_PATH=${XCODE_PATH}" "VERSION=${VERSION}"
 
       - name: Verify macOS native video artifacts
         run: bash .github/scripts/verify-macos-native-video-artifacts.sh result

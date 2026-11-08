@@ -27,8 +27,6 @@ for archive in "${archives[@]}"; do
     fi
 
     python3 "${SCRIPT_DIR}/verify-macos-curl-artifacts.py" "${package_dir}"
-    python3 "${SCRIPT_DIR}/verify-macos-cache-preview-artifacts.py" "${package_dir}"
-    python3 "${SCRIPT_DIR}/verify-macos-secondary-subtitle-artifacts.py" "${package_dir}"
 
     for framework in Mpv Placebo Vulkan MoltenVK Glslang; do
         if [ ! -d "${package_dir}/${framework}.xcframework" ]; then
@@ -44,7 +42,9 @@ for archive in "${archives[@]}"; do
         exit 1
     fi
 
-    lipo "${mpv_binary}" -verify_arch arm64 x86_64
+    for architecture in arm64 x86_64; do
+        lipo "${mpv_binary}" -verify_arch "${architecture}"
+    done
     grep -aFq 'mac/Vulkan (via Metal)' "${mpv_binary}"
     grep -aFq 'Embedding macvk output in external NSView' "${mpv_binary}"
     if grep -aFq 'Initializing embedded macvk AppKit state asynchronously' "${mpv_binary}"; then
@@ -68,7 +68,9 @@ for archive in "${archives[@]}"; do
     fi
 
     while IFS= read -r binary; do
-        lipo "${binary}" -verify_arch arm64 x86_64
+        for architecture in arm64 x86_64; do
+            lipo "${binary}" -verify_arch "${architecture}"
+        done
         if otool -L "${binary}" | grep -Fq '/nix/store/'; then
             echo "Framework dependency still refers to /nix/store: ${binary}" >&2
             exit 1
@@ -104,7 +106,9 @@ for archive in "${archives[@]}"; do
         echo "Unable to locate MoltenVK framework binary in ${archive}" >&2
         exit 1
     fi
-    lipo "${moltenvk_binary}" -verify_arch arm64 x86_64
+    for architecture in arm64 x86_64; do
+        lipo "${moltenvk_binary}" -verify_arch "${architecture}"
+    done
     if otool -L "${moltenvk_binary}" | grep -Eq '@rpath/(Glslang|SPIRV)\.framework'; then
         echo "MoltenVK.framework still uses the pre-1.3 shader runtime dependencies" >&2
         exit 1
@@ -128,4 +132,16 @@ for archive in "${archives[@]}"; do
             exit 1
         fi
     done
+
+    # Apple Silicon requires valid signatures when loading native code. The
+    # packaging steps rewrite Mach-O load commands, so sign only these temporary
+    # extracted copies after all static checks. Release archives stay unchanged.
+    if [ "$(uname -m)" == "arm64" ]; then
+        while IFS= read -r -d '' framework; do
+            codesign --force --sign - --timestamp=none "${framework}"
+        done < <(find "${package_dir}" -type d -name '*.framework' -print0)
+    fi
+
+    python3 "${SCRIPT_DIR}/verify-macos-cache-preview-artifacts.py" "${package_dir}"
+    python3 "${SCRIPT_DIR}/verify-macos-secondary-subtitle-artifacts.py" "${package_dir}"
 done

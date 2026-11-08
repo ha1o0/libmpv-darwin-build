@@ -39,6 +39,10 @@ let
         unzip ${libpngPatch} -d libpng-patch
         rsync -a libpng-patch/libpng-*/ $src/
 
+        # Modern Apple SDKs provide these functions in math.h, not fp.h.
+        substituteInPlace $src/pngpriv.h \
+          --replace-fail '#      include <fp.h>' '#      include <math.h>'
+
         cp -r $src $out
       '';
 in

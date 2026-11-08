@@ -447,6 +447,12 @@ measure HDR output brightness. For SRT/ASS pixel rendering regressions, run
 Existing clients retain shared text appearance until they opt in. iOS and macOS
 audio recipes retain their existing source selection.
 
+## Build tags on a local Mac
+
+GitHub-hosted builds remain the default. To use an Apple Silicon Mac as an
+optional self-hosted runner while preserving hosted builds for recovery, follow
+[the local runner setup and rollback guide](docs/self-hosted-runner.md).
+
 ## Naming convention
 
 ```

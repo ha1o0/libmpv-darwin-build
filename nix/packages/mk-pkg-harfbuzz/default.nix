@@ -25,10 +25,19 @@ let
     name = "${pname}-source-${version}";
     inherit (packageLock) url sha256;
   };
-  patchedSource = callPackage ../../utils/patch-shebangs/default.nix {
+  patchedSource = (callPackage ../../utils/patch-shebangs/default.nix {
     name = "${pname}-patched-source-${version}";
     inherit src;
     inherit nativeBuildInputs;
+  }).overrideAttrs {
+    patchPhase = ''
+      # New Clang versions expose a sincosf builtin even when the Apple SDK
+      # does not declare sincosf. Check math.h so HarfBuzz uses its fallback.
+      substituteInPlace $src/meson.build \
+        --replace-fail \
+          "found = cpp.has_function(name, dependencies: check_deps)" \
+          "found = name == 'sincosf' ? cpp.has_function(name, prefix: '#include <math.h>', dependencies: check_deps) : cpp.has_function(name, dependencies: check_deps)"
+    '';
   };
 in
 
