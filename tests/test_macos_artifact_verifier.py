@@ -102,7 +102,8 @@ class ArtifactVerifierTests(unittest.TestCase):
         verifier.check_load_commands(text, "fixture", is_mpv=True)
 
     def test_each_required_network_component_is_checked(self):
-        parts = [b"mpv_curl_avio\0", b"HTTP2\0", b"AppleSecTrust\0", b"OpenSSL\0"]
+        parts = [b"mpv_curl_avio\0", b"HTTP2\0", b"AppleSecTrust\0", b"OpenSSL\0",
+                 b"Disk cache background writer v4.\n\0", b".inventory-v1\0"]
         verifier.check_curl_slice(b"".join(parts), "fixture")
         for missing in range(len(parts)):
             with self.subTest(missing=parts[missing]), self.assertRaisesRegex(ValueError, "missing"):
@@ -110,7 +111,8 @@ class ArtifactVerifierTests(unittest.TestCase):
 
     def test_suffix_merged_feature_literal_is_allowed(self):
         verifier.check_curl_slice(
-            b"mpv_curl_avio\0HTTP2\0MultiSSL\0AppleSecTrust\0OpenSSL\0", "fixture")
+            b"mpv_curl_avio\0HTTP2\0MultiSSL\0AppleSecTrust\0OpenSSL\0"
+            b"Disk cache background writer v4.\n\0.inventory-v1\0", "fixture")
 
     def test_both_mkv_startup_options_are_required(self):
         verifier.check_mkv_startup_slice(b"skip-tags\0defer-cues\0", "fixture")
@@ -163,7 +165,8 @@ class ArtifactVerifierTests(unittest.TestCase):
                 if args[0] == "otool":
                     return commands()
                 if args[0] == "lipo" and args[2] == "-thin":
-                    data = b"mpv_curl_avio\0SSL\0AppleSecTrust\0OpenSSL\0skip-tags\0defer-cues\0"
+                    data = (b"mpv_curl_avio\0SSL\0AppleSecTrust\0OpenSSL\0skip-tags\0defer-cues\0"
+                            b"Disk cache background writer v4.\n\0.inventory-v1\0")
                     if args[3] == "arm64":
                         data += b"HTTP2\0"
                     Path(args[5]).write_bytes(data)
@@ -185,7 +188,8 @@ class ArtifactVerifierTests(unittest.TestCase):
                 if args[0] == "otool":
                     return commands()
                 if args[0] == "lipo" and args[2] == "-thin":
-                    data = b"mpv_curl_avio\0HTTP2\0AppleSecTrust\0OpenSSL\0skip-tags\0"
+                    data = (b"mpv_curl_avio\0HTTP2\0AppleSecTrust\0OpenSSL\0skip-tags\0"
+                            b"Disk cache background writer v4.\n\0.inventory-v1\0")
                     if args[3] == "arm64":
                         data += b"defer-cues\0"
                     Path(args[5]).write_bytes(data)

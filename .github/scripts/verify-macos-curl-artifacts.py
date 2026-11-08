@@ -89,6 +89,8 @@ def check_curl_slice(data, label):
         # curl formats "%s/%s" at runtime; "OpenSSL/" is not a literal.
         # Its TLS backend name also covers SSL, which may share this suffix.
         (b"OpenSSL\0", "the OpenSSL TLS backend"),
+        (b"Disk cache background writer v4.\n\0", "Floe v4 background cache writer"),
+        (b".inventory-v1\0", "Floe cache directory inventory"),
     )
     for marker, description in markers:
         if marker not in data:

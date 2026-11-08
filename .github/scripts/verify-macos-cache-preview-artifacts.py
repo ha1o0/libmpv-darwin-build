@@ -53,6 +53,15 @@ def probe_library(library):
         result = lib.mpv_initialize(handle)
         if result < 0:
             raise ValueError("Could not initialize the cached preview probe: {}".format(result))
+        pointer = lib.mpv_get_property_string(handle, b"floe-cache-version")
+        if not pointer:
+            raise ValueError("mpv is missing Floe disk cache v4")
+        try:
+            version = int(C.string_at(pointer).decode("ascii"))
+        finally:
+            lib.mpv_free(pointer)
+        if version < 4:
+            raise ValueError("Rebuild tracked zcopy source: Floe cache v4 is required")
         pointer = lib.mpv_get_property_string(handle, b"command-list")
         if not pointer:
             raise ValueError("Could not read mpv's command list")
@@ -64,7 +73,7 @@ def probe_library(library):
             raise ValueError("mpv is missing the floe-cache-snapshot command")
     finally:
         lib.mpv_terminate_destroy(handle)
-    print("Verified cached snapshot command and NUT muxer/demuxer: {}".format(library))
+    print("Verified Floe cache v4, cached snapshot and NUT muxer/demuxer: {}".format(library))
 
 
 def verify_package(package):
