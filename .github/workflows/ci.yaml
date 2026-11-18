@@ -1,9 +1,9 @@
-name: ci
+name: macOS libmpv build
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*-macos.*'
   workflow_dispatch:
     inputs:
       runner:
@@ -13,17 +13,11 @@ on:
         options:
           - github-hosted
           - self-hosted
-      artifacts:
-        description: Artifact set (media-kit uses four full-flavor XCFramework bundles)
-        type: choice
-        default: media-kit
-        options:
-          - media-kit
-          - all
 
 jobs:
   ci:
-    name: ci
+    name: Build macOS libraries
+    if: ${{ github.ref_name == 'codex/darwin-macos-build' || startsWith(github.ref, 'refs/tags/') }}
     # https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md
     # Tag builds stay on GitHub unless explicitly opted in. Manual runs
     # always honor the selected runner, including on tags.
@@ -110,25 +104,13 @@ jobs:
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             VERSION="${GITHUB_REF#refs/tags/}"
+            if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-macos\.[A-Za-z0-9]+([.-][A-Za-z0-9]+)*$ ]]; then
+              echo "::error::Use a vMAJOR.MINOR.PATCH-macos.SUFFIX tag."
+              exit 1
+            fi
           fi
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
-      - name: Select artifact set
-        id: artifact_set
-        env:
-          ARTIFACT_PROFILE: ${{ inputs.artifacts || vars.LIBMPV_ARTIFACT_PROFILE || 'media-kit' }}
-        run: |
-          case "${ARTIFACT_PROFILE}" in
-            media-kit) TARGET=mk-out-media-kit ;;
-            all) TARGET= ;;
-            *)
-              echo "::error::LIBMPV_ARTIFACT_PROFILE must be media-kit or all."
-              exit 1
-              ;;
-          esac
-          echo "target=${TARGET}" >> "$GITHUB_OUTPUT"
-          echo "Artifact set: ${ARTIFACT_PROFILE}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Resolve macOS video mpv from tracked branch
         run: python3 .github/scripts/update-macos-mpv-source.py
@@ -138,7 +120,7 @@ jobs:
         env:
           XCODE_PATH: ${{ steps.xcode_path.outputs.xcode_path }}
           VERSION: ${{ steps.version.outputs.version }}
-          TARGET: ${{ steps.artifact_set.outputs.target }}
+          TARGET: mk-out-media-kit
           LOCAL_MAX_JOBS: ${{ vars.LIBMPV_MAX_JOBS || '2' }}
           LOCAL_BUILD_CORES: ${{ vars.LIBMPV_BUILD_CORES || '6' }}
         run: |

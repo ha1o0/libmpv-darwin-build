@@ -10,7 +10,7 @@ VERSION ?=
 
 # Flake output attribute to build. If not set, the default package is built.
 # Example: make TARGET=mk-out-archive-libs-macos-universal-video-default
-TARGET ?=
+TARGET ?= mk-out-media-kit
 
 all: build
 

@@ -4,7 +4,7 @@
 
 let
   version = import ../../utils/version/default.nix { inherit pkgs; };
-  # The consumer's Makefiles and artifact updater use these four full-flavor
+  # The consumer's Makefiles and artifact updater use the two macOS full-flavor
   # XCFramework bundles. Keep their per-framework ZIPs for SwiftPM as well.
   archives = builtins.concatMap (
     os:
@@ -17,7 +17,7 @@ let
         flavor = "full";
       }
     ) [ "audio" "video" ]
-  ) [ "ios" "macos" ];
+  ) [ "macos" ];
 in
 
 pkgs.runCommand "mk-out-media-kit-${version}" { } ''

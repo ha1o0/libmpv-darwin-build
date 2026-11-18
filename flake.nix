@@ -31,10 +31,13 @@
       perSystem =
         { pkgs, ... }:
         {
-          packages = import ./nix/utils/flake/create-cross-packages.nix {
-            inherit pkgs;
-            path = ./nix/packages;
-          };
+          packages = let
+            all = import ./nix/utils/flake/create-cross-packages.nix {
+              inherit pkgs;
+              path = ./nix/packages;
+            };
+          in pkgs.lib.filterAttrs (name: _: pkgs.lib.hasInfix "-macos-" name || name == "mk-out-media-kit") all
+             // { default = all.mk-out-media-kit; };
         };
     };
 }

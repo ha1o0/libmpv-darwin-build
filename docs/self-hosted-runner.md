@@ -193,3 +193,11 @@ passed. Keeping it unset preserves the existing automatic GitHub workflow.
 - [Add a self-hosted runner](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)
 - [Configure the runner service](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/configure-the-application)
 - [Nix build parallelism](https://nix.dev/manual/nix/stable/command-ref/conf-file.html#conf-max-jobs)
+
+### Dedicated macOS branch
+
+`codex/darwin-macos-build` keeps the original macOS recipe and publishes only
+macOS audio/video full XCFrameworks. Use `vMAJOR.MINOR.PATCH-macos.SUFFIX` tags
+on this branch; the release workflow no longer subscribes to generic tags here.
+The iOS-only branch defines its own tag/workflow and artifact set. Existing
+`my-sync-19` and its published versions are unchanged.
