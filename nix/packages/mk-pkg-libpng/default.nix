@@ -39,9 +39,9 @@ let
         unzip ${libpngPatch} -d libpng-patch
         rsync -a libpng-patch/libpng-*/ $src/
 
-        # Modern Apple SDKs provide these functions in math.h, not fp.h.
-        substituteInPlace $src/pngpriv.h \
-          --replace-fail '#      include <fp.h>' '#      include <math.h>'
+        # TARGET_OS_MAC is also defined by modern iOS SDKs. The fp.h branch
+        # is for classic Mac OS; Darwin uses the standard math.h implementation.
+        sed -i 's/defined(TARGET_OS_MAC)/(defined(TARGET_OS_MAC) \&\& !defined(__MACH__))/' $src/pngpriv.h
 
         cp -r $src $out
       '';

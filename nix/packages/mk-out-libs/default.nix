@@ -23,16 +23,6 @@ let
       ;
   };
   pname = import ../../utils/name/output.nix name;
-  # The amd64 artifact is built natively under Rosetta on the arm64 runner.
-  # Keep the package set x86_64-native so Rust and its linker share one target.
-  targetPkgs =
-    if arch == "amd64" then
-      import pkgs.path {
-        system = "x86_64-darwin";
-        config.allowUnfree = true;
-      }
-    else
-      pkgs;
 in
 
 let
@@ -45,9 +35,6 @@ if arch != archs.universal then
     xctoolchainInstallNameTool = callPackage ../../utils/xctoolchain/install-name-tool.nix { };
 
     mpv = callPackage ../mk-pkg-mpv/default.nix { };
-    curl = callPackage ../mk-pkg-curl/default.nix { };
-    moltenvk = callPackage ../mk-pkg-moltenvk/default.nix { };
-    libplacebo = callPackage ../mk-pkg-libplacebo/default.nix { };
     ffmpeg = callPackage ../mk-pkg-ffmpeg/default.nix { };
     mbedtls = callPackage ../mk-pkg-mbedtls/default.nix { };
     fftoolsFfi = callPackage ../mk-pkg-fftools-ffi/default.nix { };
@@ -84,18 +71,6 @@ if arch != archs.universal then
         fribidi
         freetype
         libpng
-      ]
-      ++ pkgs.lib.optionals (os == "macos" && variant == "video") [
-        libplacebo
-        targetPkgs.shaderc.lib
-        targetPkgs.vulkan-loader
-        moltenvk
-        # Preserve the existing shader runtime framework set. MoltenVK 1.3.0
-        # no longer links to these libraries, but other consumers may rely on
-        # their continued presence in the video-full artifacts.
-        targetPkgs.glslang.out
-        targetPkgs.lcms2.out
-        targetPkgs.libdovi
       ]
       ++ pkgs.lib.optionals (variant == variants.video && flavor == flavors.encodersgpl) [
         libvpx
@@ -140,18 +115,11 @@ if arch != archs.universal then
       done
 
       # Change dylib's dep path /nix/store/**/libfoo.99.dylib -> @rpath/libfoo.99.dylib
-      # Intercept system libraries (libc++ and libiconv) to keep them linked to system paths
       for file in ./build/lib*.dylib; do
         deps=$(otool -L $file | tail -n +3 | sed -n 's|.*\(/nix/store/[^ ]*\).*|\1|p')
         for dep in $deps; do
           name=$(basename $dep)
-          if [[ "$name" =~ "libc++" ]]; then
-            install_name_tool -change $dep /usr/lib/libc++.1.dylib $file
-          elif [[ "$name" =~ "libiconv" ]]; then
-            install_name_tool -change $dep /usr/lib/libiconv.2.dylib $file
-          else
-            install_name_tool -change $dep @rpath/$name $file
-          fi
+          install_name_tool -change $dep @rpath/$name $file
         done
       done
 
@@ -159,53 +127,10 @@ if arch != archs.universal then
       for file in ./build/lib*.dylib; do
         deps=$(otool -L $file | tail -n +3 | sed -n 's|.*\(@rpath/[^ ]*\).*|\1|p')
         for dep in $deps; do
-          # Xcode 27 redirects CoreMedia's C imports to the Swift overlay when
-          # targeting older OS versions. FFmpeg only uses the C API; keep it
-          # linked to CoreMedia instead of packaging a nonexistent Swift framework.
-          if [[ "$dep" == "@rpath/libswiftCoreMedia.dylib" ]] &&
-             [[ "$file" == ./build/libav*.dylib || "$file" == ./build/libsw*.dylib ]]; then
-            install_name_tool -change "$dep" \
-              /System/Library/Frameworks/CoreMedia.framework/${if os == "macos" then "Versions/A/" else ""}CoreMedia \
-              "$file"
-            continue
-          fi
           name=$(echo $dep | sed -n 's|@rpath/\(lib[^.]*\).*|\1.dylib|p')
           install_name_tool -change $dep @rpath/$name $file
         done
       done
-
-      ${pkgs.lib.optionalString (os == "macos" && variant == variants.video) ''
-        # Static transport libraries have no separate framework in which to
-        # carry their notices. Keep them with every macOS video distribution.
-        mkdir -p ./build/share/licenses
-        cp -R ${curl}/share/licenses/curl-transport ./build/share/licenses/
-
-        # Build-machine search paths have no meaning in the distributed
-        # frameworks. Keep relocatable/system rpaths, but remove Nix store ones.
-        for file in ./build/lib*.dylib; do
-          while IFS= read -r rpath; do
-            case "$rpath" in
-              /nix/store/*) install_name_tool -delete_rpath "$rpath" "$file" ;;
-            esac
-          done < <(otool -l "$file" | awk '
-            $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
-            in_rpath && $1 == "path" { print $2; in_rpath = 0 }
-          ')
-        done
-
-        # The Vulkan loader resolves this path relative to the manifest. Keep
-        # the ICD relocatable so release artifacts never refer to /nix/store.
-        mkdir -p ./build/vulkan/icd.d
-        cp ${moltenvk}/share/vulkan/icd.d/MoltenVK_icd.json \
-          ./build/vulkan/icd.d/MoltenVK_icd.json
-        sed -i -E \
-          's|"library_path"[[:space:]]*:[[:space:]]*"[^"]*"|"library_path" : "../../libMoltenVK.dylib"|' \
-          ./build/vulkan/icd.d/MoltenVK_icd.json
-        if grep -Fq '/nix/store/' ./build/vulkan/icd.d/MoltenVK_icd.json; then
-          echo "MoltenVK ICD manifest still contains a Nix store path" >&2
-          exit 1
-        fi
-      ''}
     '';
     installPhase = ''
       cp -r build $out
@@ -269,12 +194,6 @@ else
         lipo_cmd+=" -output ./build/$lib_name"
         eval "$lipo_cmd"
       done
-
-      ${pkgs.lib.optionalString (os == "macos" && variant == variants.video) ''
-        cp -R ''${deps[0]}/vulkan ./build/
-        mkdir -p ./build/share/licenses
-        cp -R ''${deps[0]}/share/licenses/curl-transport ./build/share/licenses/
-      ''}
     '';
     installPhase = ''
       cp -r build $out

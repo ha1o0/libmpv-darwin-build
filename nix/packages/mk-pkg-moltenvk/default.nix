@@ -1,42 +1,22 @@
-{
-  pkgs ? import ../../utils/default/pkgs.nix,
-  os ? import ../../utils/default/os.nix,
-  arch ? pkgs.callPackage ../../utils/default/arch.nix { },
-}:
-
+{ pkgs, os, arch }:
 let
-  archs = import ../../utils/constants/archs.nix;
-  oses = import ../../utils/constants/oses.nix;
-  # The pinned nixpkgs supplies MoltenVK 1.2.11, whose HDR swapchain teardown
-  # can double-release CAEDRMetadata. Use the official 1.3.0 release containing
-  # the upstream memory-management fix without upgrading the full package set.
-  packageLock = (import ../../../packages.lock.nix).moltenvk;
-  src = pkgs.callPackage ../../utils/fetch-tarball/default.nix {
-    name = "moltenvk-source-${packageLock.version}";
-    inherit (packageLock) url sha256;
-  };
-  xctoolchainLipo = pkgs.callPackage ../../utils/xctoolchain/lipo.nix { };
-  targetArch =
-    if arch == archs.arm64 then
-      "arm64"
-    else if arch == archs.amd64 then
-      "x86_64"
-    else
-      abort "MoltenVK must be prepared per architecture before creating a universal output";
+  locks = import ../../../packages.lock.nix;
+  lock = locks.moltenvk;
+  fetch = pkgs.callPackage ../../utils/fetch-tarball/default.nix;
+  src = fetch { name = "moltenvk-${lock.version}-apple"; inherit (lock) url sha256; };
+  headers = fetch { name = "vulkan-headers-source-${locks.vulkan_headers.version}"; inherit (locks.vulkan_headers) url sha256; };
+  slice = if os == "ios" then "ios-arm64" else "ios-arm64_x86_64-simulator";
 in
-
-assert os == oses.macos;
-pkgs.runCommand "moltenvk-${packageLock.version}-${arch}" {
-  nativeBuildInputs = [ xctoolchainLipo ];
-} ''
-  mkdir -p $out/lib $out/share/vulkan/icd.d
-
-  lipo \
-    ${src}/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib \
-    -thin ${targetArch} \
-    -output $out/lib/libMoltenVK.dylib
-
-  cp \
-    ${src}/MoltenVK/dynamic/dylib/macOS/MoltenVK_icd.json \
-    $out/share/vulkan/icd.d/MoltenVK_icd.json
+assert os == "ios" || os == "iossimulator";
+pkgs.runCommand "ios-vulkan-${os}-${arch}-${lock.version}" { } ''
+  mkdir -p $out/lib/pkgconfig
+  cp ${src}/MoltenVK/static/MoltenVK.xcframework/${slice}/libMoltenVK.a $out/lib/
+  ln -s ${headers}/include $out/include
+  cat > $out/lib/pkgconfig/vulkan.pc <<PC
+Name: Vulkan
+Description: Vulkan for iOS via MoltenVK
+Version: ${locks.vulkan_headers.version}
+Cflags: -I$out/include
+Libs: -L$out/lib -lMoltenVK -lc++ -framework Metal -framework QuartzCore -framework IOSurface -framework CoreGraphics -framework UIKit -framework Foundation
+PC
 ''

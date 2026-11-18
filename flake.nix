@@ -31,10 +31,13 @@
       perSystem =
         { pkgs, ... }:
         {
-          packages = import ./nix/utils/flake/create-cross-packages.nix {
-            inherit pkgs;
-            path = ./nix/packages;
-          };
+          packages = let
+            all = import ./nix/utils/flake/create-cross-packages.nix {
+              inherit pkgs;
+              path = ./nix/packages;
+            };
+          in pkgs.lib.filterAttrs (name: _: pkgs.lib.hasInfix "-ios-" name || pkgs.lib.hasInfix "-iossimulator-" name) all
+             // { default = all.mk-out-archive-xcframeworks-ios-universal-video-full; };
         };
     };
 }

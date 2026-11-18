@@ -70,10 +70,6 @@ video_common_options = [
     '--enable-libxml2', # dash support
     '--enable-videotoolbox',
     '--enable-libdav1d', # av1 support
-    # Cached libmpv snapshots remux existing packets into a local NUT clip.
-    # Both directions are required even in video builds without encoders.
-    '--enable-muxer=nut',
-    '--enable-demuxer=nut',
 ]
 
 # https://github.com/media-kit/libmpv-android-audio-build/blob/260666c0fef8c154971b5faf3f78da27c2bf2c40/buildscripts/flavors/default.sh
@@ -104,22 +100,6 @@ audio_default_options = [
     '--enable-decoder=pcm*',
     '--enable-decoder=dsd*',
     '--enable-decoder=dca', # required by dts
-    '--enable-decoder=truehd',
-    '--enable-decoder=mlp',
-    '--enable-decoder=adpcm*',
-    '--enable-decoder=amrnb',
-    '--enable-decoder=amrwb',
-    '--enable-decoder=speex',
-
-    '--enable-decoder=rv10',
-    '--enable-decoder=rv20',
-    '--enable-decoder=rv30',
-    '--enable-decoder=rv40',
-    '--enable-decoder=cook',
-    '--enable-decoder=atrac3',
-    '--enable-decoder=sipr',
-    '--enable-decoder=ra_144',
-    '--enable-decoder=ra_288',
 
     # parsers
     '--enable-parser=aac*',
@@ -131,10 +111,6 @@ audio_default_options = [
     '--enable-parser=mpegaudio',
     '--enable-parser=tak',
     '--enable-parser=vorbis',
-    '--enable-parser=truehd',
-    '--enable-parser=mlp',
-    '--enable-parser=opus',
-    '--enable-parser=amr',
 
     # demuxers
     '--enable-demuxer=aac',
@@ -163,11 +139,6 @@ audio_default_options = [
     '--enable-demuxer=dsf',
     '--enable-demuxer=dts',
     '--enable-demuxer=truehd',
-    '--enable-demuxer=mlp',
-    '--enable-demuxer=amr',
-    '--enable-demuxer=amrnb',
-    '--enable-demuxer=amrwb',
-    '--enable-demuxer=ac4',
 
     # protocols
     '--enable-protocol=async',
@@ -190,29 +161,11 @@ audio_default_options = [
     '--enable-protocol=subfile',
     '--enable-protocol=tcp',
     '--enable-protocol=tls',
-    '--enable-protocol=udp',
-    '--enable-protocol=udplite',
-    '--enable-protocol=concat',
-    '--enable-protocol=fd',
-    '--enable-protocol=unix',
     # '--enable-protocol=srt', # WARNING: Option --enable-protocol=srt did not match anything
 
     # filters
     '--enable-filter=overlay',
     '--enable-filter=equalizer',
-    '--enable-filter=volume',
-    '--enable-filter=aresample',
-    '--enable-filter=pan',
-    '--enable-filter=channelmap',
-    '--enable-filter=channelsplit',
-    '--enable-filter=amerge',
-    '--enable-filter=aformat',
-
-    # bsfs
-    '--enable-bsf=aac_adtstoasc',
-    '--enable-bsf=truehd_core',
-    '--enable-bsf=dca_core',
-    '--enable-bsf=eac3_core',
 ]
 
 # https://github.com/media-kit/libmpv-android-video-build/blob/7353af784df9bab3256acd8d90f208024d16ab96/buildscripts/flavors/default.sh
@@ -248,6 +201,7 @@ video_default_options = [
     '--enable-decoder=ass',
     '--enable-decoder=dvbsub',
     '--enable-decoder=dvdsub',
+    '--enable-decoder=pgssub',
     '--enable-decoder=srt',
     '--enable-decoder=stl',
     '--enable-decoder=subrip',
@@ -257,21 +211,6 @@ video_default_options = [
     '--enable-decoder=vplayer',
     '--enable-decoder=webvtt',
     '--enable-decoder=movtext',
-    '--enable-decoder=prores',
-    '--enable-decoder=rawvideo',
-    '--enable-decoder=vvc',
-    '--enable-decoder=png',
-    '--enable-decoder=apng',
-    '--enable-decoder=bmp',
-    '--enable-decoder=webp',
-    '--enable-decoder=gif',
-    '--enable-decoder=tiff',
-    '--enable-decoder=pgssub',
-    '--enable-decoder=microdvd',
-    '--enable-decoder=sami',
-    '--enable-decoder=realtext',
-    '--enable-decoder=jacosub',
-    '--enable-decoder=ccaption',
 
     # parsers
     '--enable-parser=h263',
@@ -280,16 +219,6 @@ video_default_options = [
     # '--enable-parser=mpeg4', # WARNING: Option --enable-parser=mpeg4 did not match anything
     '--enable-parser=mpeg4video',
     '--enable-parser=mpegvideo',
-    '--enable-parser=av1',
-    '--enable-parser=vp9',
-    '--enable-parser=vp8',
-    '--enable-parser=vvc',
-    '--enable-parser=mjpeg',
-    '--enable-parser=bmp',
-    '--enable-parser=png',
-    '--enable-parser=webp',
-    '--enable-parser=dvdsub',
-    '--enable-parser=dvbsub',
 
     # demuxers
     '--enable-demuxer=concat',
@@ -321,16 +250,6 @@ video_default_options = [
     '--enable-demuxer=subviewer',
     '--enable-demuxer=subviewer1',
     '--enable-demuxer=vplayer',
-    '--enable-demuxer=image2',
-    '--enable-demuxer=image2pipe',
-    '--enable-demuxer=rawvideo',
-    '--enable-demuxer=sup',
-    '--enable-demuxer=ivf',
-    '--enable-demuxer=vvc',
-    '--enable-demuxer=microdvd',
-    '--enable-demuxer=sami',
-    '--enable-demuxer=realtext',
-    '--enable-demuxer=jacosub',
 
     # hwaccels
     '--enable-hwaccel=h263_videotoolbox',
@@ -340,24 +259,6 @@ video_default_options = [
     '--enable-hwaccel=mpeg2_videotoolbox',
     '--enable-hwaccel=mpeg4_videotoolbox',
     '--enable-hwaccel=vp9_videotoolbox',
-    '--enable-hwaccel=prores_videotoolbox',
-
-    # filters
-    '--enable-filter=yadif',
-    '--enable-filter=bwdif',
-    '--enable-filter=scale',
-    '--enable-filter=format',
-    '--enable-filter=fps',
-
-    # bsfs
-    '--enable-bsf=h264_mp4toannexb',
-    '--enable-bsf=hevc_mp4toannexb',
-    '--enable-bsf=vp9_superframe',
-    '--enable-bsf=vp9_superframe_split',
-    '--enable-bsf=pgs_frame_merge',
-    '--enable-bsf=av1_frame_merge',
-    '--enable-bsf=av1_frame_split',
-    '--enable-bsf=vvc_mp4toannexb',
 ]
 
 audio_full_options = [
@@ -414,26 +315,18 @@ if flavor == 'default'
         options += video_default_options
     endif
 elif flavor == 'full'
-    options += audio_default_options
     options += audio_full_options
     if variant == 'video'
-        options += video_default_options
         options += video_full_options
     endif
 elif flavor == 'encodersgpl'
-    options += audio_default_options
     options += audio_full_options
     options += audio_encodersgpl_options
     if variant == 'video'
-        options += video_default_options
         options += video_full_options
         options += video_encodersgpl_options
     endif
 endif
-
-# VideoToolbox scaling filter (scale_vt) requires iOS 16.0+, which breaks builds
-# targeting lower iOS versions (e.g. iOS 9.0). We do not use it in media-kit.
-options += ['--disable-filter=scale_vt']
 
 p = mod.add_project('configure',
     configure_options : options,

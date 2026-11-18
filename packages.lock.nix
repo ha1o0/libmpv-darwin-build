@@ -1,25 +1,12 @@
+let mobile = builtins.fromJSON (builtins.readFile ./mobile-sources.json); in
 {
-  curl = {
-    version = "8.23.0";
-    url = "https://curl.se/download/curl-8.23.0.tar.gz";
-    sha256 = "e3de77cfa6367083c776a26647fc9f633b538c06c3baa73d931a252ac8f72b49";
-  };
-  nghttp2 = {
-    version = "1.70.0";
-    url = "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.xz";
-    sha256 = "e05cb1388eaca3830aded4ccf20044b6e1ac1a61411dcca11b0437c4285c8bc2";
-  };
-  openssl = {
-    version = "3.5.9";
-    url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz";
-    sha256 = "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a";
-  };
   dav1d = {
     version = "1.2.1";
-    url = "https://codeload.github.com/videolan/dav1d/tar.gz/refs/tags/1.2.1";
-    sha256 = "2dd85860d213479672b1c708e31593446e8c2b53ff41e2ca25a2eafb718424e2";
+    url = "https://code.videolan.org/videolan/dav1d/-/archive/1.2.1/dav1d-1.2.1.tar.bz2";
+    sha256 = "a4003623cdc0109dec3aac8435520aa3fb12c4d69454fa227f2658cdb6dab5fa";
   };
-  ffmpeg = {
+  inherit (mobile) ffmpeg glslang moltenvk;
+  ffmpeg_legacy = {
     version = "7.1.5";
     url = "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz";
     sha256 = "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f";
@@ -49,11 +36,6 @@
     url = "https://github.com/libass/libass/releases/download/0.17.1/libass-0.17.1.tar.xz";
     sha256 = "f0da0bbfba476c16ae3e1cfd862256d30915911f7abaa1b16ce62ee653192784";
   };
-  libplacebo = {
-    version = "7.360.1";
-    url = "https://github.com/haasn/libplacebo/archive/refs/tags/v7.360.1.tar.gz";
-    sha256 = "d05fdf90bea2f629eaa2d115e909fd356388ac639e54f77b87a018a6d76224bd";
-  };
   libogg = {
     version = "1.3.5";
     url = "https://github.com/xiph/ogg/releases/download/v1.3.5/libogg-1.3.5.tar.gz";
@@ -81,7 +63,7 @@
   };
   libx264 = {
     version = "a8b68ebf";
-    url = "https://codeload.github.com/mirror/x264/tar.gz/a8b68ebfaa68621b5ac8907610d3335971839d52";
+    url = "https://code.videolan.org/videolan/x264/-/archive/a8b68ebfaa68621b5ac8907610d3335971839d52/libx264-a8b68ebfaa68621b5ac8907610d3335971839d52.tar.gz";
     sha256 = "164688b63f11a6e4f6d945057fc5c57d5eefb97973d0029fb0303744e10839ff";
   };
   libxml2 = {
@@ -94,31 +76,13 @@
     url = "https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v3.4.1.tar.gz";
     sha256 = "a420fcf7103e54e775c383e3751729b8fb2dcd087f6165befd13f28315f754f5";
   };
-  mpv = {
-    version = "0.36.0";
-    url = "https://github.com/ha1o0/mpv/archive/refs/heads/my-gpu-next.tar.gz";
-    sha256 = "8ff7f966c928a017936588691c5f7e3ec9f44f13d9e0ad6e4b8c9f8a647e7d19";
-  };
-  mpvMacosNativeVideo = {
-    repository = "https://github.com/ha1o0/mpv.git";
-    branch = "zcopy";
-    version = "zcopy-ec8118be155f";
-    url = "https://github.com/ha1o0/mpv/archive/ec8118be155f9b10390efb5f81e7b895796d2b36.tar.gz";
-    sha256 = "dfee96f962c6f798c2e7fc77b6f2a44bb2aad4836e231566e910a4a9240fedc0";
-  };
-  moltenvk = {
-    version = "1.3.0";
-    url = "https://github.com/KhronosGroup/MoltenVK/releases/download/v1.3.0/MoltenVK-macos.tar";
-    sha256 = "57b4184ded521b08a63e3642552ebef8b9e98c2f0bcffa49bd93bbe1301c173d";
-  };
-  vulkanHeaders = {
-    version = "1.4.357.0";
-    url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.357.0.tar.gz";
-    sha256 = "e87dce08116151f6b6d7de6b6faf41498e87e6cf848ff16fa3bd5402190ad4a3";
-  };
+  mpv = mobile.mpv;
   uchardet = {
     version = "0.0.8";
     url = "https://www.freedesktop.org/software/uchardet/releases/uchardet-0.0.8.tar.xz";
     sha256 = "e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f0";
   };
+  libplacebo = mobile.libplacebo;
+  fast_float = mobile.fast_float;
+  vulkan_headers = mobile.vulkan_headers;
 }

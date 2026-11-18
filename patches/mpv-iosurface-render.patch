@@ -1,0 +1,252 @@
+diff --git a/include/mpv/render.h b/include/mpv/render.h
+index ee927ca..6a30ff5 100644
+--- a/include/mpv/render.h
++++ b/include/mpv/render.h
+@@ -444,6 +444,13 @@ typedef enum mpv_render_param_type {
+      * Type: mpv_d3d11_fbo*
+      */
+     MPV_RENDER_PARAM_D3D11_FBO = 23,
++    /**
++     * A nonplanar 32BGRA IOSurface render target (iOS gpu-next only).
++     * Valid for mpv_render_context_render(). Type: IOSurfaceRef, passed
++     * directly in data, not a pointer to the IOSurfaceRef. GPU writes are
++     * complete when mpv_render_context_render() returns.
++     */
++    MPV_RENDER_PARAM_IOSURFACE = 24,
+ } mpv_render_param_type;
+
+ /**
+@@ -488,6 +495,7 @@ typedef struct mpv_render_param {
+  */
+ // See render_d3d11.h
+ #define MPV_RENDER_API_TYPE_D3D11 "d3d11"
++#define MPV_RENDER_API_TYPE_IOSURFACE "iosurface"
+ // See render_gl.h
+ #define MPV_RENDER_API_TYPE_OPENGL "opengl"
+ // See section "Software renderer"
+diff --git a/video/out/gpu_next/context.c b/video/out/gpu_next/context.c
+index 4923d72..9bc8305 100644
+--- a/video/out/gpu_next/context.c
++++ b/video/out/gpu_next/context.c
+@@ -575,3 +575,116 @@ const struct libmpv_gpu_next_context_fns libmpv_gpu_next_context_gl = {
+     .destroy = libmpv_gpu_next_destroy_gl,
+ };
+ #endif
++
++#if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
++#include <IOSurface/IOSurfaceRef.h>
++#include <libplacebo/vulkan.h>
++#include "video/out/placebo/ra_pl.h"
++
++struct iosurface_priv {
++    pl_log log;
++    pl_vk_inst instance;
++    pl_vulkan device;
++    pl_fmt format;
++};
++
++static void iosurface_destroy(struct libmpv_gpu_next_context *ctx)
++{
++    struct iosurface_priv *p = ctx->priv;
++    ra_pl_destroy(&ctx->ra);
++    if (ctx->ra_ctx && ctx->ra_ctx->ra) {
++        ctx->ra_ctx->ra->fns->destroy(ctx->ra_ctx->ra);
++        ctx->ra_ctx->ra = NULL;
++    }
++    pl_vulkan_destroy(&p->device);
++    pl_vk_inst_destroy(&p->instance);
++    pl_log_destroy(&p->log);
++}
++
++static int iosurface_init(struct libmpv_gpu_next_context *ctx, mpv_render_param *params)
++{
++    struct iosurface_priv *p = talloc_zero(ctx, struct iosurface_priv);
++    ctx->priv = p;
++    p->log = mppl_log_create(p, ctx->log);
++    p->instance = pl_vk_inst_create(p->log, pl_vk_inst_params(
++        .get_proc_addr = vkGetInstanceProcAddr,
++    ));
++    if (!p->instance)
++        goto fail;
++
++    p->device = pl_vulkan_create(p->log, pl_vulkan_params(
++        .instance = p->instance->instance,
++        .get_proc_addr = p->instance->get_proc_addr,
++    ));
++    if (!p->device)
++        goto fail;
++
++    ctx->gpu = p->device->gpu;
++    p->format = pl_find_named_fmt(ctx->gpu, "bgra8");
++    if (!(ctx->gpu->import_caps.tex & PL_HANDLE_IOSURFACE) ||
++        !p->format || !(p->format->caps & PL_FMT_CAP_RENDERABLE))
++        goto fail;
++
++    ctx->ra = ra_pl_create(ctx->gpu, ctx->log, p->log);
++    ctx->ra_ctx = talloc_zero(ctx, struct ra_ctx);
++    ctx->ra_ctx->global = ctx->global;
++    ctx->ra_ctx->log = ctx->log;
++    ctx->ra_ctx->ra = ra_create_pl(ctx->gpu, ctx->log);
++    if (!ctx->ra || !ctx->ra_ctx->ra)
++        goto fail;
++
++    return 0;
++
++fail:
++    MP_ERR(ctx, "Unable to initialize MoltenVK IOSurface rendering.\n");
++    iosurface_destroy(ctx);
++    return MPV_ERROR_UNSUPPORTED;
++}
++
++static int iosurface_size(mpv_render_param *params, int *w, int *h)
++{
++    IOSurfaceRef surface = get_mpv_render_param(params, MPV_RENDER_PARAM_IOSURFACE, NULL);
++    if (!surface || IOSurfaceGetPixelFormat(surface) != 0x42475241 || // 'BGRA'
++        IOSurfaceGetPlaneCount(surface) || !IOSurfaceGetWidth(surface) ||
++        !IOSurfaceGetHeight(surface) || IOSurfaceGetWidth(surface) > INT32_MAX ||
++        IOSurfaceGetHeight(surface) > INT32_MAX)
++        return MPV_ERROR_INVALID_PARAMETER;
++    *w = IOSurfaceGetWidth(surface);
++    *h = IOSurfaceGetHeight(surface);
++    return 0;
++}
++
++static int iosurface_wrap(struct libmpv_gpu_next_context *ctx,
++                          mpv_render_param *params, pl_tex *out)
++{
++    struct iosurface_priv *p = ctx->priv;
++    int w, h;
++    int err = iosurface_size(params, &w, &h);
++    if (err < 0)
++        return err;
++    IOSurfaceRef surface = get_mpv_render_param(params, MPV_RENDER_PARAM_IOSURFACE, NULL);
++    *out = pl_tex_create(ctx->gpu, pl_tex_params(
++        .w = w, .h = h, .format = p->format, .renderable = true, .blit_dst = true,
++        .import_handle = PL_HANDLE_IOSURFACE,
++        .shared_mem.handle.handle = (void *) surface,
++        .shared_mem.size = IOSurfaceGetAllocSize(surface),
++    ));
++    return *out ? 0 : MPV_ERROR_GENERIC;
++}
++
++static void iosurface_done(struct libmpv_gpu_next_context *ctx)
++{
++    // Flutter and AVKit can use different Metal command queues. Complete the
++    // write before publishing this shared surface to either consumer.
++    pl_gpu_finish(ctx->gpu);
++}
++
++const struct libmpv_gpu_next_context_fns libmpv_gpu_next_context_iosurface = {
++    .api_name = MPV_RENDER_API_TYPE_IOSURFACE,
++    .init = iosurface_init,
++    .wrap_fbo = iosurface_wrap,
++    .target_size = iosurface_size,
++    .done_frame = iosurface_done,
++    .destroy = iosurface_destroy,
++};
++#endif
+diff --git a/video/out/gpu_next/libmpv_gpu_next.c b/video/out/gpu_next/libmpv_gpu_next.c
+index a378aad..4516e7a 100644
+--- a/video/out/gpu_next/libmpv_gpu_next.c
++++ b/video/out/gpu_next/libmpv_gpu_next.c
+@@ -39,6 +39,9 @@ static const struct libmpv_gpu_next_context_fns *context_backends[] = {
+ #endif
+ #if HAVE_GL && defined(PL_HAVE_OPENGL)
+     &libmpv_gpu_next_context_gl,
++#endif
++#if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
++    &libmpv_gpu_next_context_iosurface,
+ #endif
+     NULL
+ };
+@@ -229,6 +232,8 @@ static int get_target_size(struct render_backend *ctx, mpv_render_param *params,
+ {
+     struct priv *p = ctx->priv;
+     if (!p->context || !p->context->fns || !p->context->ra) return MPV_ERROR_UNINITIALIZED;
++    if (p->context->fns->target_size)
++        return p->context->fns->target_size(params, out_w, out_h);
+     pl_tex tex = NULL;
+     int err = p->context->fns->wrap_fbo(p->context, params, &tex);
+     if (err < 0) return err;
+diff --git a/video/out/gpu_next/libmpv_gpu_next.h b/video/out/gpu_next/libmpv_gpu_next.h
+index e1e717c..db541ec 100644
+--- a/video/out/gpu_next/libmpv_gpu_next.h
++++ b/video/out/gpu_next/libmpv_gpu_next.h
+@@ -60,6 +60,9 @@ struct libmpv_gpu_next_context_fns {
+     int (*wrap_fbo)(struct libmpv_gpu_next_context *ctx,
+                     mpv_render_param *params, pl_tex *out_tex);
+
++    // Optional size query that does not create/import a render target.
++    int (*target_size)(mpv_render_param *params, int *w, int *h);
++
+     /**
+      * Called by the Host after a frame has been rendered to the user's target.
+      * This can be used for presentation timing or swapchain management.
+@@ -82,3 +85,4 @@ struct libmpv_gpu_next_context_fns {
+  */
+ extern const struct libmpv_gpu_next_context_fns libmpv_gpu_next_context_gl;
+ extern const struct libmpv_gpu_next_context_fns libmpv_gpu_next_context_d3d11;
++extern const struct libmpv_gpu_next_context_fns libmpv_gpu_next_context_iosurface;
+diff --git a/video/out/gpu_next/video.c b/video/out/gpu_next/video.c
+index 4253d70..76b0022 100644
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -34,6 +34,9 @@
+ #include <libavutil/frame.h>
+
+ #include "config.h"
++#if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
++#include "video/out/placebo/ra_pl.h"
++#endif
+ #if HAVE_D3D11
+ #include "osdep/windows_utils.h"
+ #include "video/out/d3d11/ra_d3d11.h"
+@@ -206,8 +209,30 @@ static bool hwdec_reconfig(struct pl_video *p, struct ra_hwdec *hwdec,
+     return true;
+ }
+
++static bool hwdec_tex_is_borrowed(struct pl_video *p)
++{
++#if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
++    return p->ra_ctx && ra_pl_get(p->ra_ctx->ra) == p->ra->gpu;
++#else
++    return false;
++#endif
++}
++
++static void hwdec_release_tex(struct pl_video *p, pl_tex *tex)
++{
++    if (hwdec_tex_is_borrowed(p))
++        *tex = NULL; // The VideoToolbox mapper owns the imported texture.
++    else
++        ra_next_tex_destroy(p->ra, tex);
++}
++
+ static pl_tex hwdec_get_tex(struct pl_video *p, int n)
+ {
++    if (hwdec_tex_is_borrowed(p)) {
++        struct ra_tex *tex = p->hwdec_mapper->tex[n];
++        return tex ? tex->priv : NULL;
++    }
++
+ #if HAVE_D3D11 && defined(PL_HAVE_D3D11)
+     if (p->ra_ctx && p->ra_ctx->ra && ra_is_d3d11(p->ra_ctx->ra)) {
+         struct ra_tex *ratex = p->hwdec_mapper->tex[n];
+@@ -251,7 +276,7 @@ static bool hwdec_acquire(pl_gpu gpu, struct pl_frame *frame)
+         frame->planes[n].texture = hwdec_get_tex(p, n);
+         if (!frame->planes[n].texture) {
+             for (int i = 0; i < n; i++)
+-                ra_next_tex_destroy(p->ra, &frame->planes[i].texture);
++                hwdec_release_tex(p, &frame->planes[i].texture);
+             ra_hwdec_mapper_unmap(p->hwdec_mapper);
+             return false;
+         }
+@@ -267,7 +292,7 @@ static void hwdec_release(pl_gpu gpu, struct pl_frame *frame)
+     struct pl_video *p = fp->p;
+
+     for (int n = 0; n < frame->num_planes; n++)
+-        ra_next_tex_destroy(p->ra, &frame->planes[n].texture);
++        hwdec_release_tex(p, &frame->planes[n].texture);
+
+     ra_hwdec_mapper_unmap(p->hwdec_mapper);
+ }

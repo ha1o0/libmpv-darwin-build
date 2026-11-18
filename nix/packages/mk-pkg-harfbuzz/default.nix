@@ -25,19 +25,10 @@ let
     name = "${pname}-source-${version}";
     inherit (packageLock) url sha256;
   };
-  patchedSource = (callPackage ../../utils/patch-shebangs/default.nix {
+  patchedSource = callPackage ../../utils/patch-shebangs/default.nix {
     name = "${pname}-patched-source-${version}";
     inherit src;
     inherit nativeBuildInputs;
-  }).overrideAttrs {
-    patchPhase = ''
-      # New Clang versions expose a sincosf builtin even when the Apple SDK
-      # does not declare sincosf. Check math.h so HarfBuzz uses its fallback.
-      substituteInPlace $src/meson.build \
-        --replace-fail \
-          "found = cpp.has_function(name, dependencies: check_deps)" \
-          "found = name == 'sincosf' ? cpp.has_function(name, prefix: '#include <math.h>', dependencies: check_deps) : cpp.has_function(name, dependencies: check_deps)"
-    '';
   };
 in
 
@@ -50,7 +41,12 @@ pkgs.stdenvNoCC.mkDerivation {
   enableParallelBuilding = true;
   inherit nativeBuildInputs;
   configurePhase = ''
-    meson setup build $src \
+    # New SDKs export sincosf but do not declare it for our iOS deployment
+    # target. Use HarfBuzz's equivalent portable sinf/cosf path.
+    cp -R $src source
+    chmod -R u+w source
+    sed -i "/\['sincosf'\],/d" source/meson.build
+    meson setup build source \
       --native-file ${nativeFile} \
       --cross-file ${crossFile} \
       --prefix=$out \

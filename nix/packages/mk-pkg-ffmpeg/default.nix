@@ -8,11 +8,12 @@
 
 let
   name = "ffmpeg";
-  packageLock = (import ../../../packages.lock.nix).${name};
+  locks = import ../../../packages.lock.nix;
+  iosVideo = (os == "ios" || os == "iossimulator") && variant == variants.video;
+  packageLock = if iosVideo then locks.ffmpeg else locks.ffmpeg_legacy;
   inherit (packageLock) version;
 
   flavors = import ../../utils/constants/flavors.nix;
-  oses = import ../../utils/constants/oses.nix;
   variants = import ../../utils/constants/variants.nix;
   callPackage = pkgs.lib.callPackageWith {
     inherit
@@ -44,19 +45,12 @@ let
 
     cd $src
     patch -p1 <${../../../patches/ffmpeg-fix-vp9-hwaccel.patch}
-    # patch -p1 <${../../../patches/ffmpeg-fix-hls-mp4-seek.patch}
-    patch -p1 <${../../../patches/ffmpeg-fix-ios-hdr-texture.patch}
-    patch -p1 <${../../../patches/ffmpeg-fix-dash-base-url-escape.patch}
-    ${pkgs.lib.optionalString (os == oses.macos) ''
-      patch -p1 <${../../../patches/ffmpeg-fix-custom-channel-layout-rematrix.patch}
-    ''}${pkgs.lib.optionalString (os == oses.macos && variant == variants.video) ''
-      patch -p1 <${../../../patches/ffmpeg-macos-curl-use-io-close2.patch}
-      patch -p1 <${../../../patches/ffmpeg-macos-mov-bounded-interleave.patch}
+    # Keep the legacy GLES HDR workaround outside the iOS Metal video build.
+    # FFmpeg 9 supplies P010 and already escapes DASH base URLs.
+    ${pkgs.lib.optionalString (!iosVideo) ''
+      patch -p1 <${../../../patches/ffmpeg-fix-ios-hdr-texture.patch}
+      patch -p1 <${../../../patches/ffmpeg-fix-dash-base-url-escape.patch}
     ''}
-
-    # Disable Wunguarded-availability-new warning as error in videotoolboxenc.c to support iOS deployment target of 9.0
-    sed -i '1i #pragma clang diagnostic ignored "-Wunguarded-availability-new"' libavcodec/videotoolboxenc.c
-
     cd -
 
     cp ${./meson.build} $src/meson.build
