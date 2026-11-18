@@ -2,7 +2,7 @@ name: iOS libmpv build
 run-name: iOS libmpv ${{ github.ref_type == 'tag' && github.ref_name || format('v0.0.0-ios.ci.{0}', github.run_id) }}
 on:
   push:
-    branches: [codex/darwin-ios-build]
+    branches: [darwin-ios-build]
     tags: ['v*-ios.*']
 
 permissions:

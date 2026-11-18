@@ -1,8 +1,8 @@
 # Darwin iOS build branch
 
-`codex/darwin-ios-build` uses the independent iOS MoltenVK recipe imported from
+`darwin-ios-build` uses the independent iOS MoltenVK recipe imported from
 `ha1o0/libmpv-ios-build` at `1df58af`. It builds only iOS targets. The original
-`my-sync-19` history and the dedicated `codex/darwin-macos-build` recipe are not
+`my-sync-19` history and the dedicated `darwin-macos-build` recipe are not
 part of this build. The iOS video recipe pins `ha1o0/mpv/zcopy`, FFmpeg 9.0.2 and
 MoltenVK; both device and simulator artifacts target iOS 15.0.
 
