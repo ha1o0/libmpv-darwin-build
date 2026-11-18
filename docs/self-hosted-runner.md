@@ -201,3 +201,6 @@ macOS audio/video full XCFrameworks. Use `vMAJOR.MINOR.PATCH-macos.SUFFIX` tags
 on this branch; the release workflow no longer subscribes to generic tags here.
 The iOS-only branch defines its own tag/workflow and artifact set. Existing
 `my-sync-19` and its published versions are unchanged.
+
+A lightweight `vMAJOR.MINOR.PATCH-macos.verify.N` tag always uses the local
+runner and uploads Actions artifacts without creating a GitHub Release.
