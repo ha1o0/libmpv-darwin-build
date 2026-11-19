@@ -44,6 +44,7 @@ int main(void) {
   int (*option)(void *, const char *, const char *) = dlsym(library, "mpv_set_option_string");
   int (*initialize)(void *) = dlsym(library, "mpv_initialize");
   void (*destroy)(void *) = dlsym(library, "mpv_terminate_destroy");
+  int (*get)(void *, const char *, int, void *) = dlsym(library, "mpv_get_property");
   if (!version || !create || !option || !initialize || !destroy) return 2;
   void *handle = create();
   if (!handle) return 3;
@@ -52,6 +53,10 @@ int main(void) {
   if (option(handle, "secondary-sub-style", "independent") < 0 ||
       option(handle, "secondary-sub-scale", "1.25") < 0) return 6;
   int result = initialize(handle);
+  int64_t threads = 0, frames = 0;
+  if (!get || get(handle, "options/hwdec-threads", 4, &threads) < 0 ||
+      get(handle, "options/hwdec-extra-frames", 4, &frames) < 0 ||
+      threads != 1 || frames != 2) return 7;
   destroy(handle);
   if (result < 0) { fprintf(stderr, "mpv_initialize: %d\n", result); return 5; }
   printf("LIBMPV_IOS_LOAD_OK api=%lu\n", version());

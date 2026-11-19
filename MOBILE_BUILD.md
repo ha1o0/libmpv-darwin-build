@@ -57,3 +57,17 @@ software frame, same-context software composition while paused, return to
 Vulkan, and the 4K HEVC Main 10 seek fixture. Physical-device VideoToolbox,
 AVKit timing, HDR color and repeated foreground/background transitions still
 need acceptance; a simulator result does not establish device smoothness.
+
+## iOS memory pressure
+
+The iOS video recipe defaults to one VideoToolbox decode worker and two extra
+hardware frames. These remain overridable mpv options; software decode threads,
+codec reference frames, output resolution and non-iOS recipes are unchanged.
+The non-interpolating IOSurface backend skips libplacebo's single-frame mixing
+cache. Screenshot conversion errors use the screenshot log scope, so a failed
+optional capture does not masquerade as a cplayer playback failure.
+
+The load smoke checks the hardware defaults. The render smoke forces a bounded
+screenshot allocation failure after a paused frame, checks its diagnostic scope,
+and verifies the same renderer still produces pixels afterwards. Existing HEVC
+Main 10 seek and same-decoder PiP geometry/subtitle checks remain required.

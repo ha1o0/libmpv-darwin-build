@@ -2,6 +2,9 @@
 #include <CoreVideo/CoreVideo.h>
 #include <Mpv/Mpv.h>
 #include <stdatomic.h>
+#include <dlfcn.h>
+#include <limits.h>
+#include <string.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -83,6 +86,36 @@ static bool check_decoded_pip_fallback(mpv_render_context *ctx)
     });
     if (frame) CVPixelBufferRelease(frame);
     return status == MPV_ERROR_UNSUPPORTED && !frame;
+}
+
+// Fail only the BGR0 screenshot allocation after the tiny source is paused.
+// The error must stay in the screenshot scope, while playback keeps its frame.
+static bool screenshot_allocation_failure_is_local(mpv_handle *mpv)
+{
+    void (*max_alloc)(size_t) = dlsym(RTLD_DEFAULT, "av_max_alloc");
+    if (!max_alloc)
+        return false;
+    max_alloc(2048);
+    mpv_node result = {0};
+    int status = mpv_command_ret(mpv,
+        (const char *[]) { "screenshot-raw", "video", NULL }, &result);
+    max_alloc(INT_MAX);
+    mpv_free_node_contents(&result);
+    bool scoped = false, fatal = false;
+    for (;;) {
+        mpv_event *event = mpv_wait_event(mpv, 0);
+        if (event->event_id == MPV_EVENT_NONE)
+            break;
+        if (event->event_id == MPV_EVENT_LOG_MESSAGE) {
+            mpv_event_log_message *log = event->data;
+            if (strstr(log->text, "Out of memory.")) {
+                scoped |= !strcmp(log->prefix, "screenshot");
+                fatal |= !strcmp(log->prefix, "cplayer");
+            }
+        }
+        fatal |= event->event_id == MPV_EVENT_END_FILE;
+    }
+    return status < 0 && scoped && !fatal;
 }
 
 int main(int argc, char **argv)
@@ -168,6 +201,11 @@ int main(int argc, char **argv)
                 goto done;
             did_seek = true;
             continue;
+        }
+        if (!test_seek && (!screenshot_allocation_failure_is_local(mpv) ||
+            render(render_context, a) < 0 || !has_color(a, false))) {
+            fprintf(stderr, "Screenshot allocation failure escaped its command scope\n");
+            goto done;
         }
         puts(test_seek ? "LIBMPV_IOS_IOSURFACE_OK HEVC Main 10 first frame and exact seek"
                        : "LIBMPV_IOS_IOSURFACE_OK rendered two BGRA targets while paused");

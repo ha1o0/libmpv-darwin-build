@@ -1,0 +1,47 @@
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -839,6 +839,14 @@
+     update_color_management(p, &target_frame, &params, &peak_params,
+                             &color_map_params, source_color);
+
++#if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
++    // iOS presents one source frame at a time. The mixer's redraw cache adds
++    // full-size HDR intermediates without an interpolation benefit, competing
++    // with VideoToolbox and Flutter for the device's unified memory.
++    if (p->ra_ctx && ra_pl_get(p->ra_ctx->ra) == p->ra->gpu)
++        params.skip_caching_single_frame = true;
++#endif
++
+     // Start from libplacebo's neutral defaults so every field, including color
+     // temperature, is initialized before applying mpv's equalizer values.
+     struct pl_color_adjustment color_adj = *pl_color_adjustment();
+--- a/video/decode/vd_lavc.c
++++ b/video/decode/vd_lavc.c
+@@ -171,8 +171,16 @@
+         // might require adjustment depending on whatever the player does;
+         // for example, if vo_gpu increases the number of reference surfaces for
+         // interpolation, this value has to be increased too.
++#if HAVE_IOS_GL
++        // VideoToolbox shares the iOS process budget with Flutter and Metal.
++        // Extra decode workers retain additional full-resolution HDR surfaces,
++        // especially while an exact seek replaces the decoder's reference set.
++        .hwdec_extra_frames = 2,
++        .hwdec_threads = 1,
++#else
+         .hwdec_extra_frames = 6,
+         .hwdec_threads = 4,
++#endif
+     },
+ };
+
+--- a/player/screenshot.c
++++ b/player/screenshot.c
+@@ -476,7 +476,7 @@
+     if (!mpi)
+         return NULL;
+     struct mp_image *res = convert_image(mpi, format, mpctx->global,
+-                                         mpctx->log);
++                                         mpctx->screenshot_ctx->log);
+     talloc_free(mpi);
+     return res;
+ }
