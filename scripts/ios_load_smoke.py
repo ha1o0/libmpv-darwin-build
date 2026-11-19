@@ -117,6 +117,23 @@ def main():
                         '-Wl,-rpath,@executable_path/Frameworks', str(source), *extra,
                         '-o', str(executable)], check=True)
         subprocess.run(['codesign', '--force', '--sign', '-', str(executable)], check=True)
+        pip_executable = None
+        if args.iosurface:
+            pattern = directory / 'pip-pattern.y4m'
+            # Left red, right blue; quarter-turn checks cannot pass on a
+            # uniformly colored image or on a dummy renderer redraw.
+            pattern.write_bytes(b'YUV4MPEG2 W32 H16 F25:1 Ip A1:1 C420jpeg\nFRAME\n' +
+                (bytes([81]) * 16 + bytes([41]) * 16) * 16 +
+                (bytes([90]) * 8 + bytes([240]) * 8) * 8 +
+                (bytes([240]) * 8 + bytes([110]) * 8) * 8)
+            subtitle = directory / 'pip.srt'
+            subtitle.write_text('1\n00:00:00,000 --> 00:01:00,000\nPiP\n', encoding='utf-8')
+            pip_executable = directory / 'pip-smoke'
+            subprocess.run(['xcrun', '--sdk', 'iphonesimulator', 'clang', '-target', f'{arch}-apple-ios15.0-simulator',
+                '-isysroot', run(['xcrun', '--sdk', 'iphonesimulator', '--show-sdk-path']),
+                '-Wl,-rpath,@executable_path/Frameworks', str(source.with_name('ios_pip_smoke.c')),
+                *extra, '-o', str(pip_executable)], check=True)
+            subprocess.run(['codesign', '--force', '--sign', '-', str(pip_executable)], check=True)
         device = args.device or run(['xcrun', 'simctl', 'create', f'libmpv-validation-{os.getpid()}', device_type, runtime])
         try:
             if not args.device:
@@ -126,6 +143,18 @@ def main():
                 cmd = ['xcrun', 'simctl', 'spawn', device, str(executable), *sample]
                 completed = subprocess.run(cmd, text=True, stdout=subprocess.PIPE,
                                            stderr=subprocess.STDOUT, timeout=120)
+                if completed.returncode or marker not in completed.stdout:
+                    raise RuntimeError(f'Simulator did not confirm {marker}:\n{completed.stdout}')
+                print(next(line for line in completed.stdout.splitlines() if marker in line))
+                if args.iosurface:
+                    pip_marker = 'LIBMPV_IOS_PIP_OK'
+                    if pip_marker not in completed.stdout:
+                        raise RuntimeError('Simulator did not confirm same-context PiP composition')
+                    print(next(line for line in completed.stdout.splitlines() if pip_marker in line))
+            if pip_executable:
+                completed = subprocess.run(['xcrun', 'simctl', 'spawn', device, str(pip_executable), str(pattern), str(subtitle)],
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+                marker = 'LIBMPV_IOS_PIP_COMPOSITION_OK'
                 if completed.returncode or marker not in completed.stdout:
                     raise RuntimeError(f'Simulator did not confirm {marker}:\n{completed.stdout}')
                 print(next(line for line in completed.stdout.splitlines() if marker in line))

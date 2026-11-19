@@ -36,3 +36,24 @@ writes before handing the IOSurface to Flutter or AVKit, which use separate
 Metal queues. The [MoltenVK runtime guide](https://github.com/KhronosGroup/MoltenVK/blob/v1.4.2/Docs/MoltenVK_Runtime_UserGuide.md)
 describes the portability and integration requirements; its swapchain tuning
 does not apply to this offscreen target.
+
+## PiP on the existing decoder
+
+The iOS video recipe exposes `MPV_RENDER_PARAM_IOS_PIP_FRAME` for AVKit
+consumers. The host first peeks a retained VideoToolbox `CVPixelBuffer` with
+`mpv_render_context_get_info()`. When backgrounded, it can consume subsequent
+timed frames from the same libmpv render context without invoking Vulkan or
+releasing/reselecting the video track. The complementary
+`MPV_RENDER_PARAM_IOS_PIP_SW` composes a BGRA target up to 640 pixels per edge
+from that same frame for subtitles, rotation and software-decoded output.
+It maps supported VideoToolbox surfaces read-only instead of allocating a
+full-resolution hardware download. Composition uses mpv's existing software
+renderer and OSD; both PiP APIs defer all primary GPU work until inline
+rendering resumes. Hosts must probe support before bypassing the GPU: old
+libraries ignore unknown render parameters.
+
+The simulator smoke verifies raw-export rejection without consuming a
+software frame, same-context software composition while paused, return to
+Vulkan, and the 4K HEVC Main 10 seek fixture. Physical-device VideoToolbox,
+AVKit timing, HDR color and repeated foreground/background transitions still
+need acceptance; a simulator result does not establish device smoothness.

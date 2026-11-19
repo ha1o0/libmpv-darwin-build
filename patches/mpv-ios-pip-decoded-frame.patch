@@ -1,0 +1,398 @@
+diff --git a/include/mpv/render.h b/include/mpv/render.h
+index 6a30ff5..4bc58bf 100644
+--- a/include/mpv/render.h
++++ b/include/mpv/render.h
+@@ -451,6 +451,38 @@ typedef enum mpv_render_param_type {
+      * complete when mpv_render_context_render() returns.
+      */
+     MPV_RENDER_PARAM_IOSURFACE = 24,
++    /**
++     * Export a decoded iOS VideoToolbox frame, before GPU/OSD composition.
++     * Type: void **, which receives a retained CVPixelBufferRef, or NULL.
++     * The caller releases a non-NULL result using CVPixelBufferRelease().
++     *
++     * In mpv_render_context_get_info(), peek the retained current frame
++     * without consuming it. Use this to detect support before changing the
++     * presentation path; older libraries return MPV_ERROR_NOT_IMPLEMENTED.
++     *
++     * In mpv_render_context_render(), requires SKIP_RENDERING. Consumes
++     * the next frame with normal presentation timing, but does not invoke
++     * the GPU backend, even if its resize/reset/reconfig is pending. There
++     * is no output for redraws/repeated frames or when no frame is pending.
++     *
++     * A frame that is not backed by VideoToolbox returns UNSUPPORTED;
++     * in render() it remains queued so the caller can use its fallback.
++     * This does not start, stop, seek or reconfigure the media decoder.
++     */
++    MPV_RENDER_PARAM_IOS_PIP_FRAME = 25,
++    /**
++     * iOS PiP software composition on the existing render context.
++     * Type: int*, set to 1. Requires SKIP_RENDERING to keep the primary GPU
++     * backend idle. Standard SW_SIZE/FORMAT/STRIDE/POINTER parameters render
++     * a bounded (at most 640 pixels per edge) BGRA/bgr0 target, including OSD
++     * and rotation, from the same decoded frame. VideoToolbox surfaces are
++     * mapped read-only, without a full-resolution copy or decoder restart.
++     * Omitting all SW target parameters only consumes the timed frame.
++     *
++     * get_info() writes 1 to an int* to indicate support. Old libraries return
++     * NOT_IMPLEMENTED, so hosts must probe before suppressing GPU rendering.
++     */
++    MPV_RENDER_PARAM_IOS_PIP_SW = 26,
+ } mpv_render_param_type;
+
+ /**
+diff --git a/video/out/vo_libmpv.c b/video/out/vo_libmpv.c
+index 5f19eb3..ade47aa 100644
+--- a/video/out/vo_libmpv.c
++++ b/video/out/vo_libmpv.c
+@@ -26,6 +26,11 @@
+ #include "video/mp_image.h"         // for mp_image_params
+ #include "vo.h"                     // for vo, vo_frame, mp_voctrl, vo_frame...
+
++#if HAVE_IOS_GL && HAVE_VULKAN
++#include <CoreVideo/CoreVideo.h>
++#include "video/mp_image_pool.h"
++#endif
++
+ #if HAVE_MACOS_COCOA_CB
+ #include "osdep/mac/app_bridge.h"
+ #endif
+@@ -106,6 +111,14 @@ struct mpv_render_context {
+     // --- All of these can only be accessed from mpv_render_*() API, for
+     //     which the user makes sure they're called synchronized.
+     struct render_backend *renderer;
++#if HAVE_IOS_GL && HAVE_VULKAN
++    struct render_backend *pip_renderer;
++    struct mp_image_pool *pip_pool;
++    struct m_config_cache *pip_opts_cache;
++    struct mp_image_params pip_params;
++    int pip_w, pip_h, pip_rotation;
++    struct mp_osd_res pip_osd;
++#endif
+     struct m_config_cache *vo_opts_cache;
+     struct mp_vo_opts *vo_opts;
+ };
+@@ -326,6 +339,12 @@ void mpv_render_context_free(mpv_render_context *ctx)
+
+     forget_frames(ctx, true);
+
++#if HAVE_IOS_GL && HAVE_VULKAN
++    if (ctx->pip_renderer) {
++        ctx->pip_renderer->fns->destroy(ctx->pip_renderer);
++        talloc_free(ctx->pip_renderer->priv);
++    }
++#endif
+     if (ctx->renderer) {
+         ctx->renderer->fns->destroy(ctx->renderer);
+         talloc_free(ctx->renderer->priv);
+@@ -352,12 +371,244 @@ bool mp_render_context_acquire(mpv_render_context *ctx)
+     return atomic_compare_exchange_strong(&ctx->in_use, &prev, true);
+ }
+
++#if HAVE_IOS_GL && HAVE_VULKAN
++// The view and its base addresses live only while the source vo_frame is
++// retained and the CVPixelBuffer is locked. No second 4K frame is allocated.
++static int map_pip_image(struct mp_image *source, struct mp_image *view,
++                         CVPixelBufferRef *locked)
++{
++    *view = *source;
++    *locked = NULL;
++    if (!IMGFMT_IS_HWACCEL(source->imgfmt))
++        return 0;
++    if (source->imgfmt != IMGFMT_VIDEOTOOLBOX || !source->planes[3])
++        return MPV_ERROR_UNSUPPORTED;
++    CVPixelBufferRef pixel = (CVPixelBufferRef)source->planes[3];
++    int format;
++    switch (CVPixelBufferGetPixelFormatType(pixel)) {
++    case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
++    case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
++        format = IMGFMT_NV12;
++        break;
++    case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
++    case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
++        format = IMGFMT_P010;
++        break;
++    case kCVPixelFormatType_32BGRA:
++        format = IMGFMT_BGRA;
++        break;
++    default:
++        return MPV_ERROR_UNSUPPORTED;
++    }
++    if (source->w > CVPixelBufferGetWidth(pixel) ||
++        source->h > CVPixelBufferGetHeight(pixel) ||
++        CVPixelBufferLockBaseAddress(pixel, kCVPixelBufferLock_ReadOnly))
++        return MPV_ERROR_UNSUPPORTED;
++    *locked = pixel;
++    mp_image_setfmt(view, format);
++    view->params.hw_subfmt = 0;
++    for (int n = 0; n < view->num_planes; n++) {
++        bool planar = CVPixelBufferIsPlanar(pixel);
++        view->planes[n] = planar ? CVPixelBufferGetBaseAddressOfPlane(pixel, n)
++                                 : CVPixelBufferGetBaseAddress(pixel);
++        size_t stride = planar ? CVPixelBufferGetBytesPerRowOfPlane(pixel, n)
++                                : CVPixelBufferGetBytesPerRow(pixel);
++        if (!view->planes[n] || stride > INT_MAX)
++            return MPV_ERROR_UNSUPPORTED;
++        view->stride[n] = stride;
++    }
++    return 0;
++}
++
++static int render_pip_sw(struct mpv_render_context *ctx, mpv_render_param *params,
++                          struct vo_frame *frame, struct osd_state *osd)
++{
++    int *size = get_mpv_render_param(params, MPV_RENDER_PARAM_SW_SIZE, NULL);
++    char *format = get_mpv_render_param(params, MPV_RENDER_PARAM_SW_FORMAT, NULL);
++    size_t *stride = get_mpv_render_param(params, MPV_RENDER_PARAM_SW_STRIDE, NULL);
++    void *pixels = get_mpv_render_param(params, MPV_RENDER_PARAM_SW_POINTER, NULL);
++    if (!size && !format && !stride && !pixels)
++        return 0;
++    if (!size || !format || !stride || !pixels || size[0] < 1 || size[1] < 1 ||
++        size[0] > 640 || size[1] > 640 || *stride < size[0] * 4 ||
++        *stride > INT_MAX || (strcmp(format, "bgr0") && strcmp(format, "bgra")))
++        return MPV_ERROR_INVALID_PARAMETER;
++    if (!frame->current)
++        return MPV_ERROR_UNINITIALIZED;
++
++    struct mp_image image;
++    CVPixelBufferRef locked = NULL;
++    int status = map_pip_image(frame->current, &image, &locked);
++    struct mp_image *intermediate = NULL;
++    if (status < 0)
++        goto done;
++    int rotation = image.params.rotate;
++    if (rotation % 90) {
++        status = MPV_ERROR_UNSUPPORTED;
++        goto done;
++    }
++    if (image.params.vflip) {
++        mp_image_vflip(&image);
++        image.params.vflip = false;
++    }
++    image.params.rotate = 0;
++    int width = size[rotation % 180 == 90 ? 1 : 0];
++    int height = size[rotation % 180 == 90 ? 0 : 1];
++
++    if (!ctx->pip_renderer) {
++        ctx->pip_renderer = talloc_zero(ctx, struct render_backend);
++        *ctx->pip_renderer = (struct render_backend) {
++            .global = ctx->global, .log = ctx->log, .fns = &render_backend_sw,
++        };
++        status = ctx->pip_renderer->fns->init(ctx->pip_renderer, (mpv_render_param[]) {
++            { MPV_RENDER_PARAM_API_TYPE, MPV_RENDER_API_TYPE_SW }, {0},
++        });
++        if (status < 0) {
++            ctx->pip_renderer->fns->destroy(ctx->pip_renderer);
++            talloc_free(ctx->pip_renderer->priv);
++            TA_FREEP(&ctx->pip_renderer);
++            goto done;
++        }
++        ctx->pip_pool = mp_image_pool_new(ctx);
++        ctx->pip_opts_cache = m_config_cache_alloc(ctx, ctx->global, &vo_sub_opts);
++    }
++    bool changed = m_config_cache_update(ctx->pip_opts_cache);
++    changed |= !mp_image_params_static_equal(&ctx->pip_params, &image.params) ||
++                ctx->pip_w != width || ctx->pip_h != height ||
++                ctx->pip_rotation != rotation;
++    struct mp_vo_opts *opts = ctx->pip_opts_cache->opts;
++    if (changed) {
++        struct mp_rect src, dst;
++        struct mp_osd_res unrotated_osd;
++        ctx->pip_params = image.params;
++        ctx->pip_w = width;
++        ctx->pip_h = height;
++        ctx->pip_rotation = rotation;
++        ctx->pip_renderer->fns->reconfig(ctx->pip_renderer, &image.params);
++        mp_get_src_dst_rects(ctx->log, opts, 0, &image.params, width, height,
++                            1.0, &src, &dst, &unrotated_osd);
++        ctx->pip_renderer->fns->resize(ctx->pip_renderer, &src, &dst, &unrotated_osd);
++        struct mp_image_params oriented = image.params;
++        oriented.rotate = rotation;
++        mp_get_src_dst_rects(ctx->log, opts, VO_CAP_ROTATE90, &oriented,
++                            size[0], size[1], 1.0, &src, &dst, &ctx->pip_osd);
++    }
++    // Draw subtitles after the image has been rotated, so text stays upright.
++    ctx->pip_renderer->fns->update_external(ctx->pip_renderer, NULL);
++    size_t render_stride = *stride;
++    void *render_pixels = pixels;
++    if (rotation) {
++        intermediate = mp_image_pool_get(ctx->pip_pool, IMGFMT_BGR0, width, height);
++        if (!intermediate) {
++            status = MPV_ERROR_NOMEM;
++            goto done;
++        }
++        render_pixels = intermediate->planes[0];
++        render_stride = intermediate->stride[0];
++    }
++    int render_size[] = { width, height };
++    struct vo_frame software_frame = *frame;
++    software_frame.current = &image;
++    status = ctx->pip_renderer->fns->render(ctx->pip_renderer, (mpv_render_param[]) {
++        { MPV_RENDER_PARAM_SW_SIZE, render_size },
++        { MPV_RENDER_PARAM_SW_FORMAT, format },
++        { MPV_RENDER_PARAM_SW_STRIDE, &render_stride },
++        { MPV_RENDER_PARAM_SW_POINTER, render_pixels }, {0},
++    }, &software_frame);
++    if (status < 0)
++        goto done;
++    if (rotation) {
++        for (int y = 0; y < height; y++) {
++            for (int x = 0; x < width; x++) {
++                int dx = rotation == 90 ? height - 1 - y :
++                         rotation == 180 ? width - 1 - x : y;
++                int dy = rotation == 90 ? x :
++                         rotation == 180 ? height - 1 - y : width - 1 - x;
++                memcpy((uint8_t *)pixels + dy * *stride + dx * 4,
++                       (uint8_t *)render_pixels + y * render_stride + x * 4, 4);
++            }
++        }
++    }
++    if (osd) {
++        struct mp_image target = {0};
++        struct mp_image_params output = {
++            .imgfmt = strcmp(format, "bgra") ? IMGFMT_BGR0 : IMGFMT_BGRA,
++            .w = size[0], .h = size[1],
++        };
++        mp_image_params_guess_csp(&output);
++        mp_image_set_params(&target, &output);
++        target.planes[0] = pixels;
++        target.stride[0] = *stride;
++        osd_draw_on_image(osd, ctx->pip_osd, image.pts, 0, &target);
++    }
++done:
++    talloc_free(intermediate);
++    if (locked)
++        CVPixelBufferUnlockBaseAddress(locked, kCVPixelBufferLock_ReadOnly);
++    return status;
++}
++
++// Called under ctx->lock: retain before releasing the image's vo_frame ref.
++static int retain_pip_frame(struct vo_frame *frame, void **output)
++{
++    *output = NULL;
++    if (!frame || !frame->current)
++        return 0;
++    struct mp_image *image = frame->current;
++    if (image->imgfmt != IMGFMT_VIDEOTOOLBOX || !image->planes[3])
++        return MPV_ERROR_UNSUPPORTED;
++    if (image->params.rotate || image->params.vflip ||
++        (mp_image_crop_valid(&image->params) &&
++         (image->params.crop.x0 || image->params.crop.y0 ||
++          image->params.crop.x1 != image->w || image->params.crop.y1 != image->h)))
++        return MPV_ERROR_UNSUPPORTED;
++    CVPixelBufferRef pixel = (CVPixelBufferRef)image->planes[3];
++    if (CVPixelBufferGetWidth(pixel) != image->w || CVPixelBufferGetHeight(pixel) != image->h)
++        return MPV_ERROR_UNSUPPORTED;
++    *output = CVPixelBufferRetain(pixel);
++    return 0;
++}
++#endif
++
+ int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
+ {
+     mp_mutex_lock(&ctx->lock);
+
+     int do_render =
+         !GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_SKIP_RENDERING, int, 0);
++    bool pip_only = false;
++#if HAVE_IOS_GL && HAVE_VULKAN
++    bool pip_sw = GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_IOS_PIP_SW, int, 0);
++    struct osd_state *pip_osd = ctx->vo ? ctx->vo->osd : NULL;
++    void **pip_output = get_mpv_render_param(params, MPV_RENDER_PARAM_IOS_PIP_FRAME, NULL);
++    if (pip_sw) {
++        if (do_render || pip_output) {
++            mp_mutex_unlock(&ctx->lock);
++            return MPV_ERROR_INVALID_PARAMETER;
++        }
++        pip_only = true;
++    }
++    if (pip_output) {
++        *pip_output = NULL;
++        if (do_render) {
++            mp_mutex_unlock(&ctx->lock);
++            return MPV_ERROR_INVALID_PARAMETER;
++        }
++        pip_only = true;
++        struct vo_frame *next = ctx->next_frame;
++        if (!next) {
++            mp_mutex_unlock(&ctx->lock);
++            return 0;
++        }
++        if (!next->redraw && !next->repeat) {
++            int status = retain_pip_frame(next, pip_output);
++            if (status < 0) {
++                mp_mutex_unlock(&ctx->lock);
++                return status;
++            }
++        }
++    }
++#endif
+
+     if (do_render) {
+         int vp_w, vp_h;
+@@ -387,20 +638,22 @@ int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
+         ctx->need_resize = false;
+     }
+
+-    if (ctx->need_reconfig)
+-        ctx->renderer->fns->reconfig(ctx->renderer, &ctx->img_params);
+-    ctx->need_reconfig = false;
++    if (!pip_only) {
++        if (ctx->need_reconfig)
++            ctx->renderer->fns->reconfig(ctx->renderer, &ctx->img_params);
++        ctx->need_reconfig = false;
+
+-    if (ctx->need_update_external)
+-        ctx->renderer->fns->update_external(ctx->renderer, ctx->vo);
+-    ctx->need_update_external = false;
++        if (ctx->need_update_external)
++            ctx->renderer->fns->update_external(ctx->renderer, ctx->vo);
++        ctx->need_update_external = false;
+
+-    if (ctx->need_reset) {
+-        ctx->renderer->fns->reset(ctx->renderer);
+-        if (ctx->cur_frame)
+-            ctx->cur_frame->still = true;
++        if (ctx->need_reset) {
++            ctx->renderer->fns->reset(ctx->renderer);
++            if (ctx->cur_frame)
++                ctx->cur_frame->still = true;
++        }
++        ctx->need_reset = false;
+     }
+-    ctx->need_reset = false;
+
+     struct vo_frame *frame = ctx->next_frame;
+     int64_t wait_present_count = ctx->present_count;
+@@ -429,6 +682,10 @@ int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
+
+     if (do_render)
+         err = ctx->renderer->fns->render(ctx->renderer, params, frame);
++#if HAVE_IOS_GL && HAVE_VULKAN
++    if (pip_sw)
++        err = render_pip_sw(ctx, params, frame, pip_osd);
++#endif
+
+     if (frame != &dummy)
+         talloc_free(frame);
+@@ -481,6 +738,20 @@ int mpv_render_context_get_info(mpv_render_context *ctx,
+     mp_mutex_lock(&ctx->lock);
+
+     switch (param.type) {
++#if HAVE_IOS_GL && HAVE_VULKAN
++    case MPV_RENDER_PARAM_IOS_PIP_SW:
++        if (param.data) {
++            *(int *)param.data = 1;
++            res = 0;
++        } else {
++            res = MPV_ERROR_INVALID_PARAMETER;
++        }
++        break;
++    case MPV_RENDER_PARAM_IOS_PIP_FRAME:
++        res = param.data ? retain_pip_frame(ctx->cur_frame, param.data)
++                         : MPV_ERROR_INVALID_PARAMETER;
++        break;
++#endif
+     case MPV_RENDER_PARAM_NEXT_FRAME_INFO: {
+         mpv_render_frame_info *info = param.data;
+         *info = (mpv_render_frame_info){0};

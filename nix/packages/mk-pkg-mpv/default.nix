@@ -57,6 +57,7 @@ let
       patch -p1 <${../../../patches/mpv-iosurface-render.patch}
       patch -p1 <${../../../patches/mpv-iosurface-reuse.patch}
       patch -p1 <${../../../patches/mpv-ios-metal-packed-frames.patch}
+      patch -p1 <${../../../patches/mpv-ios-pip-decoded-frame.patch}
     ''}
     if [ "${variant}" == "${variants.audio}" ]; then
       patch -p1 <${../../../patches/mpv-remove-libass.patch}

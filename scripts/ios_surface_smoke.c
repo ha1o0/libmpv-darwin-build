@@ -38,6 +38,26 @@ static int render(mpv_render_context *render_context, CVPixelBufferRef buffer)
     return status;
 }
 
+static int render_pip(mpv_render_context *ctx, CVPixelBufferRef buffer)
+{
+    int skip = 1, mode = 1, block = 0;
+    int size[] = { CVPixelBufferGetWidth(buffer), CVPixelBufferGetHeight(buffer) };
+    size_t stride = CVPixelBufferGetBytesPerRow(buffer);
+    if (CVPixelBufferLockBaseAddress(buffer, 0))
+        return MPV_ERROR_GENERIC;
+    int status = mpv_render_context_render(ctx, (mpv_render_param[]) {
+        { MPV_RENDER_PARAM_IOS_PIP_SW, &mode },
+        { MPV_RENDER_PARAM_SKIP_RENDERING, &skip },
+        { MPV_RENDER_PARAM_SW_SIZE, size },
+        { MPV_RENDER_PARAM_SW_FORMAT, "bgr0" },
+        { MPV_RENDER_PARAM_SW_STRIDE, &stride },
+        { MPV_RENDER_PARAM_SW_POINTER, CVPixelBufferGetBaseAddress(buffer) },
+        { MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block }, {0},
+    });
+    CVPixelBufferUnlockBaseAddress(buffer, 0);
+    return status;
+}
+
 static bool has_color(CVPixelBufferRef buffer, bool blue)
 {
     if (CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly))
@@ -50,12 +70,28 @@ static bool has_color(CVPixelBufferRef buffer, bool blue)
     return matches;
 }
 
+static bool check_decoded_pip_fallback(mpv_render_context *ctx)
+{
+    void *frame = NULL;
+    int skip = 1, block = 0;
+    // The ordinary SKIP_RENDERING API may touch the GPU. The PiP variant
+    // must reject an unsupported software frame without consuming it.
+    int status = mpv_render_context_render(ctx, (mpv_render_param[]) {
+        { MPV_RENDER_PARAM_IOS_PIP_FRAME, &frame },
+        { MPV_RENDER_PARAM_SKIP_RENDERING, &skip },
+        { MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block }, { 0 },
+    });
+    if (frame) CVPixelBufferRelease(frame);
+    return status == MPV_ERROR_UNSUPPORTED && !frame;
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2 && argc != 3)
         return 1;
     const bool test_seek = argc == 3;
     bool did_seek = false;
+    bool checked_pip_fallback = false;
     mpv_handle *mpv = mpv_create();
     mpv_render_context *render_context = NULL;
     CVPixelBufferRef a = make_pixel_buffer(32, 32), b = make_pixel_buffer(64, 64);
@@ -77,6 +113,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "MoltenVK create: %s\n", mpv_error_string(status));
         goto done;
     }
+    void *decoded = NULL;
+    if (mpv_render_context_get_info(render_context, (mpv_render_param) {
+            MPV_RENDER_PARAM_IOS_PIP_FRAME, &decoded }) < 0 || decoded)
+        goto done;
+    int pip_supported = 0;
+    if (mpv_render_context_get_info(render_context, (mpv_render_param) {
+            MPV_RENDER_PARAM_IOS_PIP_SW, &pip_supported }) < 0 || pip_supported != 1)
+        goto done;
     mpv_render_context_set_update_callback(render_context, updated, &pending);
     if (mpv_command(mpv, (const char *[]) { "loadfile", argv[1], NULL }) < 0)
         goto done;
@@ -90,10 +134,31 @@ int main(int argc, char **argv)
         }
         if (!atomic_exchange(&pending, false))
             continue;
+        if (!checked_pip_fallback) {
+            mpv_render_frame_info info = {0};
+            if (mpv_render_context_get_info(render_context, (mpv_render_param) {
+                    MPV_RENDER_PARAM_NEXT_FRAME_INFO, &info }) < 0)
+                goto done;
+            if ((info.flags & MPV_RENDER_FRAME_INFO_PRESENT) &&
+                !(info.flags & (MPV_RENDER_FRAME_INFO_REDRAW | MPV_RENDER_FRAME_INFO_REPEAT))) {
+                if (!check_decoded_pip_fallback(render_context)) {
+                    fprintf(stderr, "Decoded PiP accepted or lost a software fallback frame\n");
+                    goto done;
+                }
+                checked_pip_fallback = true;
+            }
+        }
         if (render(render_context, a) < 0)
             goto done;
         if (!has_color(a, did_seek))
             continue;
+        if (!checked_pip_fallback)
+            goto done;
+        // The same context must compose the retained paused frame, and then
+        // return to the original Vulkan output without a track / decoder swap.
+        if (render_pip(render_context, b) < 0 || !has_color(b, did_seek) ||
+            render(render_context, a) < 0 || !has_color(a, did_seek))
+            goto done;
         if (render(render_context, a) < 0 || !has_color(a, did_seek))
             goto done;
         if (render(render_context, b) < 0 || !has_color(b, did_seek) || !has_color(a, did_seek))
@@ -106,6 +171,7 @@ int main(int argc, char **argv)
         }
         puts(test_seek ? "LIBMPV_IOS_IOSURFACE_OK HEVC Main 10 first frame and exact seek"
                        : "LIBMPV_IOS_IOSURFACE_OK rendered two BGRA targets while paused");
+        puts("LIBMPV_IOS_PIP_OK same-context software composition and return to Vulkan");
         result = 0;
         break;
     }
