@@ -1,0 +1,17 @@
+--- a/video/out/hwdec/hwdec_vt_pl.m
++++ b/video/out/hwdec/hwdec_vt_pl.m
+@@ -235,8 +235,12 @@
+             return -1;
+         }
+ 
+-        size_t width  = CVPixelBufferGetWidthOfPlane(p->pbuf, i),
+-               height = CVPixelBufferGetHeightOfPlane(p->pbuf, i);
++        // Packed frames have no planar dimensions. Passing zero to
++        // CVMetalTextureCache prevents importing these VideoToolbox frames.
++        size_t width = planar ? CVPixelBufferGetWidthOfPlane(p->pbuf, i)
++                              : CVPixelBufferGetWidth(p->pbuf);
++        size_t height = planar ? CVPixelBufferGetHeightOfPlane(p->pbuf, i)
++                               : CVPixelBufferGetHeight(p->pbuf);
+ 
+         CVReturn err = CVMetalTextureCacheCreateTextureFromImage(
+             kCFAllocatorDefault,

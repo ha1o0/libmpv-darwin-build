@@ -95,7 +95,7 @@ def main():
             subprocess.run(['codesign', '--force', '--sign', '-', str(frameworks / item['LibraryPath'])], check=True)
         source = directory / 'smoke.c'
         extra = []
-        sample = []
+        samples = [[]]
         marker = 'LIBMPV_IOS_LOAD_OK api='
         if args.iosurface:
             source = Path(__file__).with_name('ios_surface_smoke.c')
@@ -105,7 +105,8 @@ def main():
             # One 32x32 BT.601 limited-range red frame (Y=81, U=90, V=240).
             video.write_bytes(b'YUV4MPEG2 W32 H32 F25:1 Ip A1:1 C420jpeg\nFRAME\n' +
                               bytes([81]) * 1024 + bytes([90]) * 256 + bytes([240]) * 256)
-            sample = [str(video)]
+            hevc = source.with_name('fixtures') / 'hevc10-3840x1600.mp4'
+            samples = [[str(video)], [str(hevc), '--verify-seek']]
             marker = 'LIBMPV_IOS_IOSURFACE_OK'
         else:
             source.write_text(SOURCE)
@@ -121,12 +122,13 @@ def main():
             if not args.device:
                 subprocess.run(['xcrun', 'simctl', 'boot', device], check=True, timeout=120)
                 subprocess.run(['xcrun', 'simctl', 'bootstatus', device, '-b'], check=True, timeout=300)
-            cmd = ['xcrun', 'simctl', 'spawn', device, str(executable), *sample]
-            completed = subprocess.run(cmd, text=True, stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT, timeout=120)
-            if completed.returncode or marker not in completed.stdout:
-                raise RuntimeError(f'Simulator did not confirm {marker}:\n{completed.stdout}')
-            print(next(line for line in completed.stdout.splitlines() if marker in line))
+            for sample in samples:
+                cmd = ['xcrun', 'simctl', 'spawn', device, str(executable), *sample]
+                completed = subprocess.run(cmd, text=True, stdout=subprocess.PIPE,
+                                           stderr=subprocess.STDOUT, timeout=120)
+                if completed.returncode or marker not in completed.stdout:
+                    raise RuntimeError(f'Simulator did not confirm {marker}:\n{completed.stdout}')
+                print(next(line for line in completed.stdout.splitlines() if marker in line))
         finally:
             if not args.device:
                 subprocess.run(['xcrun', 'simctl', 'shutdown', device], check=False,

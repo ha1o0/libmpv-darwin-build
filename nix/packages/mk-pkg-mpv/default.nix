@@ -53,7 +53,11 @@ let
     cd $src
     patch -p1 <${../../../patches/mpv-mobile-darwin.patch}
     patch -p1 <${../../../patches/mpv-audiounit-shared-session.patch}
-    ${pkgs.lib.optionalString iosMetal "patch -p1 <${../../../patches/mpv-iosurface-render.patch}"}
+    ${pkgs.lib.optionalString iosMetal ''
+      patch -p1 <${../../../patches/mpv-iosurface-render.patch}
+      patch -p1 <${../../../patches/mpv-iosurface-reuse.patch}
+      patch -p1 <${../../../patches/mpv-ios-metal-packed-frames.patch}
+    ''}
     if [ "${variant}" == "${variants.audio}" ]; then
       patch -p1 <${../../../patches/mpv-remove-libass.patch}
     fi

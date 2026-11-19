@@ -33,8 +33,8 @@
     "sha256": "4bdcd8cdb330313f0d4deed7be527b0ac1c115ff272e492853a6e98add61b4bc"
   },
   "moltenvk": {
-    "version": "1.3.0",
-    "url": "https://github.com/KhronosGroup/MoltenVK/releases/download/v1.3.0/MoltenVK-all.tar",
-    "sha256": "3cfddbc1e55a79e0732b7b857541240a059959487ccdc5dcf5a431825b92dffc"
+    "version": "1.4.2",
+    "url": "https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-all.tar",
+    "sha256": "562a15a29bc358446a56a4091c5f7e08f604184187c1d34f712148b61ef17276"
   }
 }

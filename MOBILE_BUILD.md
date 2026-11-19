@@ -21,5 +21,18 @@ For local validation, set the local Xcode path in the Nix build config as in
 `Makefile`, build `.#mk-out-archive-xcframeworks-ios-universal-video-full`, and
 run the load and `--iosurface` smoke checks on the unpacked archive with
 `scripts/ios_load_smoke.py --runtime auto`. The GPU smoke compares actual pixels
-in two Core Video targets; it does not replace physical-device HDR, VideoToolbox
-or AVKit PiP acceptance.
+in two Core Video targets, including a 3840×1600 HEVC Main 10 fixture before
+and after an exact seek. This is a simulator/software-decode test; it does not
+replace physical-device HDR, VideoToolbox or AVKit PiP acceptance.
+
+The iOS recipe requests Metal-compatible VideoToolbox buffers with the OpenGL
+ES attribute preserved for the fallback. This follows the same Metal buffer
+requirement as MPVKit, but keeps the `libmpv` IOSurface target for Flutter and
+AVKit instead of rendering directly into MPVKit's `CAMetalLayer` swapchain.
+libplacebo negotiates Vulkan portability and Metal import extensions. The
+offscreen backend reuses at most four imported targets and retires them when
+the target size changes or the renderer is destroyed. It still completes GPU
+writes before handing the IOSurface to Flutter or AVKit, which use separate
+Metal queues. The [MoltenVK runtime guide](https://github.com/KhronosGroup/MoltenVK/blob/v1.4.2/Docs/MoltenVK_Runtime_UserGuide.md)
+describes the portability and integration requirements; its swapchain tuning
+does not apply to this offscreen target.

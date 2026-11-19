@@ -1,0 +1,138 @@
+diff --git a/video/out/gpu_next/context.c b/video/out/gpu_next/context.c
+index f18f13d..4412c33 100644
+--- a/video/out/gpu_next/context.c
++++ b/video/out/gpu_next/context.c
+@@ -581,16 +581,47 @@ const struct libmpv_gpu_next_context_fns libmpv_gpu_next_context_gl = {
+ #include <libplacebo/vulkan.h>
+ #include "video/out/placebo/ra_pl.h"
+ 
++// Match the Flutter CVPixelBufferPool's four-slot allocation threshold.
++#define IOSURFACE_TARGETS 4
++
++struct iosurface_target {
++    IOSurfaceRef surface;
++    pl_tex texture;
++};
++
+ struct iosurface_priv {
+     pl_log log;
+     pl_vk_inst instance;
+     pl_vulkan device;
+     pl_fmt format;
++    int width, height;
++    unsigned next_target;
++    struct iosurface_target targets[IOSURFACE_TARGETS];
+ };
+ 
++static void iosurface_drop_target(struct libmpv_gpu_next_context *ctx, unsigned index)
++{
++    struct iosurface_priv *p = ctx->priv;
++    struct iosurface_target *target = &p->targets[index];
++    if (!target->surface)
++        return;
++    pl_tex_destroy(ctx->gpu, &target->texture);
++    CFRelease(target->surface);
++    target->surface = NULL;
++}
++
++static void iosurface_drop_targets(struct libmpv_gpu_next_context *ctx)
++{
++    struct iosurface_priv *p = ctx->priv;
++    for (unsigned i = 0; i < IOSURFACE_TARGETS; i++)
++        iosurface_drop_target(ctx, i);
++    p->next_target = 0;
++}
++
+ static void iosurface_destroy(struct libmpv_gpu_next_context *ctx)
+ {
+     struct iosurface_priv *p = ctx->priv;
++    iosurface_drop_targets(ctx);
+     ra_pl_destroy(&ctx->ra);
+     if (ctx->ra_ctx && ctx->ra_ctx->ra) {
+         ctx->ra_ctx->ra->fns->destroy(ctx->ra_ctx->ra);
+@@ -663,13 +694,35 @@ static int iosurface_wrap(struct libmpv_gpu_next_context *ctx,
+     if (err < 0)
+         return err;
+     IOSurfaceRef surface = get_mpv_render_param(params, MPV_RENDER_PARAM_IOSURFACE, NULL);
+-    *out = pl_tex_create(ctx->gpu, pl_tex_params(
++    if (w != p->width || h != p->height) {
++        iosurface_drop_targets(ctx);
++        p->width = w;
++        p->height = h;
++    }
++    IOSurfaceID id = IOSurfaceGetID(surface);
++    for (unsigned i = 0; i < IOSURFACE_TARGETS; i++) {
++        struct iosurface_target *target = &p->targets[i];
++        if (target->surface && IOSurfaceGetID(target->surface) == id) {
++            *out = target->texture;
++            return 0;
++        }
++    }
++
++    unsigned index = p->next_target++ % IOSURFACE_TARGETS;
++    // Release the old import before allocating a replacement.
++    iosurface_drop_target(ctx, index);
++    pl_tex texture = pl_tex_create(ctx->gpu, pl_tex_params(
+         .w = w, .h = h, .format = p->format, .renderable = true, .blit_dst = true,
+         .import_handle = PL_HANDLE_IOSURFACE,
+         .shared_mem.handle.handle = (void *) surface,
+         .shared_mem.size = IOSurfaceGetAllocSize(surface),
+     ));
+-    return *out ? 0 : MPV_ERROR_GENERIC;
++    if (!texture)
++        return MPV_ERROR_GENERIC;
++    CFRetain(surface);
++    p->targets[index] = (struct iosurface_target) { surface, texture };
++    *out = texture;
++    return 0;
+ }
+ 
+ static void iosurface_done(struct libmpv_gpu_next_context *ctx)
+@@ -683,6 +736,7 @@ const struct libmpv_gpu_next_context_fns libmpv_gpu_next_context_iosurface = {
+     .api_name = MPV_RENDER_API_TYPE_IOSURFACE,
+     .init = iosurface_init,
+     .wrap_fbo = iosurface_wrap,
++    .retains_wrapped_targets = true,
+     .target_size = iosurface_size,
+     .done_frame = iosurface_done,
+     .destroy = iosurface_destroy,
+diff --git a/video/out/gpu_next/libmpv_gpu_next.c b/video/out/gpu_next/libmpv_gpu_next.c
+index 4516e7a..c46366a 100644
+--- a/video/out/gpu_next/libmpv_gpu_next.c
++++ b/video/out/gpu_next/libmpv_gpu_next.c
+@@ -149,8 +149,8 @@ static int render(struct render_backend *ctx, mpv_render_param *params,
+     // Render the video frame.
+     pl_video_render(p->video_engine, frame, target_tex);
+ 
+-    // Destroy the temporary wrapper texture via the RA.
+-    ra_next_tex_destroy(p->context->ra, &target_tex);
++    if (!p->context->fns->retains_wrapped_targets)
++        ra_next_tex_destroy(p->context->ra, &target_tex);
+ 
+     if (p->context->fns->done_frame)
+         p->context->fns->done_frame(p->context);
+diff --git a/video/out/gpu_next/libmpv_gpu_next.h b/video/out/gpu_next/libmpv_gpu_next.h
+index db541ec..e53c4c6 100644
+--- a/video/out/gpu_next/libmpv_gpu_next.h
++++ b/video/out/gpu_next/libmpv_gpu_next.h
+@@ -52,14 +52,17 @@ struct libmpv_gpu_next_context_fns {
+      * that our engine can understand.
+      * @param ctx The context instance.
+      * @param params The list of parameters from the user, containing the target.
+-     * @param out_tex On success, this will point to a newly created, temporary
+-     *                `pl_tex` that wraps the user's target. The caller is
+-     *                responsible for freeing this texture.
++     * @param out_tex On success, points to the wrapped target. The caller owns
++     *                it unless `retains_wrapped_targets` is set.
+      * @return 0 on success, or a negative mpv_error code.
+      */
+     int (*wrap_fbo)(struct libmpv_gpu_next_context *ctx,
+                     mpv_render_param *params, pl_tex *out_tex);
+ 
++    // A context retaining targets must also implement target_size, so the
++    // generic size query never tries to destroy a borrowed texture.
++    bool retains_wrapped_targets;
++
+     // Optional size query that does not create/import a render target.
+     int (*target_size)(mpv_render_param *params, int *w, int *h);
+ 

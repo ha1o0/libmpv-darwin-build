@@ -38,22 +38,24 @@ static int render(mpv_render_context *render_context, CVPixelBufferRef buffer)
     return status;
 }
 
-static bool is_red(CVPixelBufferRef buffer)
+static bool has_color(CVPixelBufferRef buffer, bool blue)
 {
     if (CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly))
         return false;
     const uint8_t *base = CVPixelBufferGetBaseAddress(buffer);
     const uint8_t *center = base + CVPixelBufferGetBytesPerRow(buffer) *
         (CVPixelBufferGetHeight(buffer) / 2) + (CVPixelBufferGetWidth(buffer) / 2) * 4;
-    bool red = center[2] > 170 && center[1] < 85 && center[0] < 85;
+    bool matches = center[blue ? 0 : 2] > 170 && center[1] < 85 && center[blue ? 2 : 0] < 85;
     CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
-    return red;
+    return matches;
 }
 
 int main(int argc, char **argv)
 {
-    if (argc != 2)
+    if (argc != 2 && argc != 3)
         return 1;
+    const bool test_seek = argc == 3;
+    bool did_seek = false;
     mpv_handle *mpv = mpv_create();
     mpv_render_context *render_context = NULL;
     CVPixelBufferRef a = make_pixel_buffer(32, 32), b = make_pixel_buffer(64, 64);
@@ -62,6 +64,7 @@ int main(int argc, char **argv)
     if (!mpv || !a || !b || mpv_set_option_string(mpv, "config", "no") < 0 ||
         mpv_set_option_string(mpv, "vo", "libmpv") < 0 ||
         mpv_set_option_string(mpv, "ao", "null") < 0 ||
+        mpv_set_option_string(mpv, "hwdec", "no") < 0 ||
         mpv_set_option_string(mpv, "pause", "yes") < 0 || mpv_initialize(mpv) < 0)
         goto done;
 
@@ -77,7 +80,8 @@ int main(int argc, char **argv)
     mpv_render_context_set_update_callback(render_context, updated, &pending);
     if (mpv_command(mpv, (const char *[]) { "loadfile", argv[1], NULL }) < 0)
         goto done;
-    const uint64_t deadline = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + 8000000000ULL;
+    const uint64_t deadline = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) +
+        (test_seek ? 25000000000ULL : 8000000000ULL);
     while (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < deadline) {
         mpv_event *event = mpv_wait_event(mpv, 0.02);
         if (event->event_id == MPV_EVENT_LOG_MESSAGE) {
@@ -88,11 +92,20 @@ int main(int argc, char **argv)
             continue;
         if (render(render_context, a) < 0)
             goto done;
-        if (!is_red(a))
+        if (!has_color(a, did_seek))
             continue;
-        if (render(render_context, b) < 0 || !is_red(b) || !is_red(a))
+        if (render(render_context, a) < 0 || !has_color(a, did_seek))
             goto done;
-        puts("LIBMPV_IOS_IOSURFACE_OK rendered two BGRA targets while paused");
+        if (render(render_context, b) < 0 || !has_color(b, did_seek) || !has_color(a, did_seek))
+            goto done;
+        if (test_seek && !did_seek) {
+            if (mpv_command(mpv, (const char *[]) { "seek", "1.25", "absolute+exact", NULL }) < 0)
+                goto done;
+            did_seek = true;
+            continue;
+        }
+        puts(test_seek ? "LIBMPV_IOS_IOSURFACE_OK HEVC Main 10 first frame and exact seek"
+                       : "LIBMPV_IOS_IOSURFACE_OK rendered two BGRA targets while paused");
         result = 0;
         break;
     }
