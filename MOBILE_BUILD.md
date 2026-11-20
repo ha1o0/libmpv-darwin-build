@@ -71,3 +71,20 @@ The load smoke checks the hardware defaults. The render smoke forces a bounded
 screenshot allocation failure after a paused frame, checks its diagnostic scope,
 and verifies the same renderer still produces pixels afterwards. Existing HEVC
 Main 10 seek and same-decoder PiP geometry/subtitle checks remain required.
+
+### iOS Anime4K hooks
+
+The iOS IOSurface render API now loads `glsl-shaders` into libplacebo's mpv
+user-shader hooks. It retains only the active chain, redraws paused frames when
+switching, handles both empty-list encodings, and keeps a complete working chain
+when a new file cannot be parsed. The shader patch is applied only to iOS video
+builds; existing memory-pressure, VideoToolbox and same-decoder PiP patches stay
+in place. PiP continues its existing software composition without GPU effects,
+and returning inline restores the enhanced frame.
+
+Release validation runs the official Anime4K Restore S and Upscale x2 M shaders
+against actual simulator IOSurfaces. It checks changed pixels for each appended
+pass, unchanged pixels after clearing, repeated re-enabling, failed-load recovery
+and PiP return. The same command also retains ordinary rendering, Main 10 seek,
+subtitle and screenshot-error-isolation checks. An option-list readback alone
+is not accepted as evidence that shaders executed.

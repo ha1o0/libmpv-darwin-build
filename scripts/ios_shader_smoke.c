@@ -79,14 +79,20 @@ int main(int argc, char **argv)
     drain_logs(mpv, true);
     if (mpv_set_property_string(mpv, "glsl-shaders", "") < 0 ||
         render(ctx, buffer) < 0 || fingerprint(buffer) != baseline) goto done;
+    uint64_t previous = baseline;
     for (int i = 3; i < argc; i++) {
         if (mpv_command(mpv, (const char *[]) {"change-list", "glsl-shaders", "append", argv[i], NULL}) < 0 ||
-            render(ctx, buffer) < 0 || fingerprint(buffer) == baseline ||
+            render(ctx, buffer) < 0 || fingerprint(buffer) == previous ||
             !drain_logs(mpv, false)) {
             fprintf(stderr, "Anime4K chain did not alter pixels, or shader compilation failed\n");
             goto done;
         }
+        previous = fingerprint(buffer);
     }
+    // PiP stays on the existing software route while GPU hooks remain loaded.
+    // Returning inline must reproduce the exact enhanced paused frame.
+    if (render_pip(ctx, buffer) < 0 || fingerprint(buffer) == previous ||
+        render(ctx, buffer) < 0 || fingerprint(buffer) != previous) goto done;
     for (int i = 0; i < 3; i++) {
         if (mpv_set_property_string(mpv, "glsl-shaders", "") < 0 ||
             render(ctx, buffer) < 0 || fingerprint(buffer) != baseline) goto done;
