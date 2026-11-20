@@ -1,0 +1,115 @@
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -32,6 +32,9 @@
+ 
+ #include <libavutil/dovi_meta.h>
+ #include <libavutil/frame.h>
++#include <libplacebo/shaders/custom.h>
++#include "options/path.h"
++#include "stream/stream.h"
+ 
+ #include "config.h"
+ #if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
+@@ -80,6 +83,7 @@
+  */
+ struct pl_video {
+     struct mp_log *log;
++    struct mpv_global *global;
+     struct ra_next *ra;    // The libplacebo rendering abstraction
+     struct ra_ctx *ra_ctx;
+     struct mp_hwdec_devices *hwdec_devs;
+@@ -105,7 +109,70 @@
+     struct mp_csp_equalizer_state *video_eq; // Manages brightness, contrast, hue, etc.
+     struct m_config_cache *opts_cache;       // Standard mpv gpu/tone-map options.
+     struct m_config_cache *next_opts_cache;  // gpu-next-specific options.
++    char **shader_paths; // Last requested chain, including rejected requests.
++    const struct pl_hook **shader_hooks;
++    int num_shader_hooks;
+ };
++
++// The libmpv gpu-next API does not pass through vo_gpu_next's hook loader.
++// Keep only the active chain: cycling Anime4K presets must not retain every
++// previously parsed shader or its textures on memory-constrained devices.
++static void destroy_shader_hooks(const struct pl_hook ***hooks, int count)
++{
++    for (int i = 0; i < count; i++)
++        pl_mpv_user_shader_destroy(&(*hooks)[i]);
++    talloc_free(*hooks);
++    *hooks = NULL;
++}
++
++static void update_shader_hooks(struct pl_video *p, struct pl_render_params *params)
++{
++    m_config_cache_update(p->opts_cache);
++    const struct gl_video_opts *opts = p->opts_cache->opts;
++    int count = 0;
++    bool changed = false;
++    for (; opts->user_shaders && opts->user_shaders[count]; count++) {
++        if (!p->shader_paths || !p->shader_paths[count] ||
++            strcmp(opts->user_shaders[count], p->shader_paths[count])) {
++            changed = true;
++            break;
++        }
++    }
++    if (!changed && p->shader_paths && p->shader_paths[count])
++        changed = true;
++    if (changed) {
++        count = 0;
++        while (opts->user_shaders && opts->user_shaders[count]) count++;
++        talloc_free(p->shader_paths);
++        p->shader_paths = talloc_zero_array(p, char *, count + 1);
++        const struct pl_hook **hooks = talloc_zero_array(p, const struct pl_hook *, count);
++        bool valid = true;
++        for (int i = 0; i < count; i++) {
++            p->shader_paths[i] = talloc_strdup(p->shader_paths, opts->user_shaders[i]);
++            char *path = mp_get_user_path(NULL, p->global, opts->user_shaders[i]);
++            bstr code = stream_read_file(path, NULL, p->global, 16 * 1024 * 1024);
++            if (code.len)
++                hooks[i] = pl_mpv_user_shader_parse(p->ra->gpu, code.start, code.len);
++            talloc_free(code.start);
++            talloc_free(path);
++            valid &= hooks[i] != NULL;
++        }
++        if (valid) {
++            // Retained paused frames must be redrawn with the new chain.
++            pl_gpu_finish(p->ra->gpu);
++            ra_pl_reset(p->ra);
++            destroy_shader_hooks(&p->shader_hooks, p->num_shader_hooks);
++            p->shader_hooks = hooks;
++            p->num_shader_hooks = count;
++            mp_msg(p->log, MSGL_V, "Applied %d user shader hooks.\n", count);
++        } else {
++            destroy_shader_hooks(&hooks, count);
++            mp_msg(p->log, MSGL_ERR, "Unable to load user shader chain; keeping previous hooks.\n");
++        }
++    }
++    params->hooks = p->shader_hooks;
++    params->num_hooks = p->num_shader_hooks;
++}
+ 
+ /**
+  * @brief Private data attached to each mp_image pushed into the queue.
+@@ -518,6 +585,7 @@
+                                struct mp_hwdec_devices *hwdec_devs) {
+     struct pl_video *p = talloc_zero(NULL, struct pl_video);
+     p->log = log;
++    p->global = global;
+     p->ra = ra;
+     p->ra_ctx = ra_ctx;
+     p->hwdec_devs = hwdec_devs;
+@@ -564,6 +632,7 @@
+         pl_gpu_finish(p->ra->gpu);
+ 
+     ra_next_queue_destroy(&p->queue);
++    destroy_shader_hooks(&p->shader_hooks, p->num_shader_hooks);
+ 
+     // Clean up all allocated OSD GPU resources
+     for (int i = 0; i < MP_ARRAY_SIZE(p->osd_state_storage.entries); i++) {
+@@ -838,6 +907,7 @@
+                                                : NULL;
+     update_color_management(p, &target_frame, &params, &peak_params,
+                             &color_map_params, source_color);
++    update_shader_hooks(p, &params);
+ 
+ #if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
+     // iOS presents one source frame at a time. The mixer's redraw cache adds

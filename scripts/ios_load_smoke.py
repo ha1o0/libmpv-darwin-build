@@ -139,6 +139,22 @@ def main():
                 '-Wl,-rpath,@executable_path/Frameworks', str(source.with_name('ios_pip_smoke.c')),
                 *extra, '-o', str(pip_executable)], check=True)
             subprocess.run(['codesign', '--force', '--sign', '-', str(pip_executable)], check=True)
+        shader_executable = None
+        if args.iosurface:
+            shader_pattern = directory / 'shader-pattern.y4m'
+            # Edges and gradients make a restore CNN visibly differ from identity.
+            luma = bytes(32 + ((x * 7 + y * 13 + (x // 8 % 2) * 50) % 180)
+                         for y in range(64) for x in range(64))
+            shader_pattern.write_bytes(b'YUV4MPEG2 W64 H64 F25:1 Ip A1:1 C420jpeg\nFRAME\n' +
+                                       luma + bytes([128]) * 2048)
+            diagnostic = directory / 'diagnostic.glsl'
+            diagnostic.write_text('//!HOOK MAIN\n//!BIND HOOKED\nvec4 hook() { return vec4(1.0, 0.0, 0.0, 1.0); }\n')
+            shader_executable = directory / 'shader-smoke'
+            subprocess.run(['xcrun', '--sdk', 'iphonesimulator', 'clang', '-target', f'{arch}-apple-ios15.0-simulator',
+                '-isysroot', run(['xcrun', '--sdk', 'iphonesimulator', '--show-sdk-path']),
+                '-Wl,-rpath,@executable_path/Frameworks', str(source.with_name('ios_shader_smoke.c')),
+                *extra, '-o', str(shader_executable)], check=True)
+            subprocess.run(['codesign', '--force', '--sign', '-', str(shader_executable)], check=True)
         device = args.device or run(['xcrun', 'simctl', 'create', f'libmpv-validation-{os.getpid()}', device_type, runtime])
         try:
             if not args.device:
@@ -160,6 +176,16 @@ def main():
                 completed = subprocess.run(['xcrun', 'simctl', 'spawn', device, str(pip_executable), str(pattern), str(subtitle)],
                     text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
                 marker = 'LIBMPV_IOS_PIP_COMPOSITION_OK'
+                if completed.returncode or marker not in completed.stdout:
+                    raise RuntimeError(f'Simulator did not confirm {marker}:\n{completed.stdout}')
+                print(next(line for line in completed.stdout.splitlines() if marker in line))
+            if shader_executable:
+                fixtures = source.with_name('fixtures') / 'anime4k'
+                completed = subprocess.run(['xcrun', 'simctl', 'spawn', device, str(shader_executable),
+                    str(shader_pattern), str(diagnostic), str(fixtures / 'Anime4K_Restore_CNN_S.glsl'),
+                    str(fixtures / 'Anime4K_Upscale_CNN_x2_M.glsl')], text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+                marker = 'LIBMPV_IOS_ANIME4K_OK'
                 if completed.returncode or marker not in completed.stdout:
                     raise RuntimeError(f'Simulator did not confirm {marker}:\n{completed.stdout}')
                 print(next(line for line in completed.stdout.splitlines() if marker in line))
