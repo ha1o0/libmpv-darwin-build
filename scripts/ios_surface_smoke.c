@@ -118,6 +118,8 @@ static bool screenshot_allocation_failure_is_local(mpv_handle *mpv)
     return status < 0 && scoped && !fatal;
 }
 
+#include "ios_cache_preview_smoke.c"
+
 int main(int argc, char **argv)
 {
     if (argc != 2 && argc != 3)
@@ -134,6 +136,10 @@ int main(int argc, char **argv)
         mpv_set_option_string(mpv, "vo", "libmpv") < 0 ||
         mpv_set_option_string(mpv, "ao", "null") < 0 ||
         mpv_set_option_string(mpv, "hwdec", "no") < 0 ||
+        (test_seek && (mpv_set_option_string(mpv, "cache", "yes") < 0 ||
+                      mpv_set_option_string(mpv, "demuxer-seekable-cache", "yes") < 0 ||
+                      mpv_set_option_string(mpv, "demuxer-max-bytes", "33554432") < 0 ||
+                      mpv_set_option_string(mpv, "demuxer-readahead-secs", "20") < 0)) ||
         mpv_set_option_string(mpv, "pause", "yes") < 0 || mpv_initialize(mpv) < 0)
         goto done;
 
@@ -205,6 +211,11 @@ int main(int argc, char **argv)
         if (!test_seek && (!screenshot_allocation_failure_is_local(mpv) ||
             render(render_context, a) < 0 || !has_color(a, false))) {
             fprintf(stderr, "Screenshot allocation failure escaped its command scope\n");
+            goto done;
+        }
+        if (test_seek && (!check_cache_preview(mpv) ||
+            render(render_context, a) < 0 || !has_color(a, true))) {
+            fprintf(stderr, "Cached preview failed or changed primary rendering\n");
             goto done;
         }
         puts(test_seek ? "LIBMPV_IOS_IOSURFACE_OK HEVC Main 10 first frame and exact seek"

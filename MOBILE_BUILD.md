@@ -88,3 +88,17 @@ pass, unchanged pixels after clearing, repeated re-enabling, failed-load recover
 and PiP return. The same command also retains ordinary rendering, Main 10 seek,
 subtitle and screenshot-error-isolation checks. An option-list readback alone
 is not accepted as evidence that shaders executed.
+
+### Buffered playback previews
+
+The video FFmpeg recipe includes the NUT muxer and demuxer used by the existing
+desktop cache snapshot service. The app reads buffered packets through
+`floe-cache-snapshot`; enabling this format does not add a source fetch or move
+the primary player's position. All source versions and iOS rendering patches
+remain pinned to the previous build.
+
+The loader smoke rejects libraries without either NUT direction. The IOSurface
+smoke also snapshots the buffered HEVC Main 10 fixture, opens that local NUT in
+an independent renderer, verifies the expected blue frame, and checks that the
+primary position and output are unchanged. This runs on the existing remote
+Mac runner as part of ordinary branch builds and tagged releases.

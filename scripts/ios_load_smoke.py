@@ -39,6 +39,16 @@ SOURCE = r'''
 int main(void) {
   void *library = dlopen("@rpath/Mpv.framework/Mpv", RTLD_NOW | RTLD_LOCAL);
   if (!library) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
+  void *avformat = dlopen("@rpath/Avformat.framework/Avformat", RTLD_NOW | RTLD_LOCAL);
+  const void *(*guess_format)(const char *, const char *, const char *) =
+      avformat ? dlsym(avformat, "av_guess_format") : NULL;
+  const void *(*find_input)(const char *) =
+      avformat ? dlsym(avformat, "av_find_input_format") : NULL;
+  if (!guess_format || !find_input || !guess_format("nut", NULL, NULL) ||
+      !find_input("nut")) {
+    fprintf(stderr, "Missing NUT cache snapshot muxer/demuxer\n"); return 8;
+  }
+  dlclose(avformat);
   unsigned long (*version)(void) = dlsym(library, "mpv_client_api_version");
   void *(*create)(void) = dlsym(library, "mpv_create");
   int (*option)(void *, const char *, const char *) = dlsym(library, "mpv_set_option_string");
@@ -172,6 +182,11 @@ def main():
                     if pip_marker not in completed.stdout:
                         raise RuntimeError('Simulator did not confirm same-context PiP composition')
                     print(next(line for line in completed.stdout.splitlines() if pip_marker in line))
+                    if '--verify-seek' in sample:
+                        cache_marker = 'LIBMPV_IOS_CACHE_PREVIEW_OK'
+                        if cache_marker not in completed.stdout:
+                            raise RuntimeError('Simulator did not confirm cached snapshot decoding')
+                        print(next(line for line in completed.stdout.splitlines() if cache_marker in line))
             if pip_executable:
                 completed = subprocess.run(['xcrun', 'simctl', 'spawn', device, str(pip_executable), str(pattern), str(subtitle)],
                     text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)

@@ -70,6 +70,10 @@ video_common_options = [
     '--enable-libxml2', # dash support
     '--enable-videotoolbox',
     '--enable-libdav1d', # av1 support
+    # Match desktop cache previews: remux buffered packets into a local NUT
+    # snapshot, then read it with an independent decoder (no source request).
+    '--enable-muxer=nut',
+    '--enable-demuxer=nut',
 ]
 
 # https://github.com/media-kit/libmpv-android-audio-build/blob/260666c0fef8c154971b5faf3f78da27c2bf2c40/buildscripts/flavors/default.sh
