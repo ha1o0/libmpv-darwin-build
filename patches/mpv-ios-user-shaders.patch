@@ -18,7 +18,7 @@
      struct ra_next *ra;    // The libplacebo rendering abstraction
      struct ra_ctx *ra_ctx;
      struct mp_hwdec_devices *hwdec_devs;
-@@ -105,7 +109,70 @@
+@@ -105,7 +109,72 @@
      struct mp_csp_equalizer_state *video_eq; // Manages brightness, contrast, hue, etc.
      struct m_config_cache *opts_cache;       // Standard mpv gpu/tone-map options.
      struct m_config_cache *next_opts_cache;  // gpu-next-specific options.
@@ -60,15 +60,17 @@
 +        p->shader_paths = talloc_zero_array(p, char *, count + 1);
 +        const struct pl_hook **hooks = talloc_zero_array(p, const struct pl_hook *, count);
 +        bool valid = true;
++        int hook_count = 0;
 +        for (int i = 0; i < count; i++) {
 +            p->shader_paths[i] = talloc_strdup(p->shader_paths, opts->user_shaders[i]);
++            if (!opts->user_shaders[i][0]) continue; // mpv can represent clear as [""].
 +            char *path = mp_get_user_path(NULL, p->global, opts->user_shaders[i]);
 +            bstr code = stream_read_file(path, NULL, p->global, 16 * 1024 * 1024);
 +            if (code.len)
-+                hooks[i] = pl_mpv_user_shader_parse(p->ra->gpu, code.start, code.len);
++                hooks[hook_count] = pl_mpv_user_shader_parse(p->ra->gpu, code.start, code.len);
 +            talloc_free(code.start);
 +            talloc_free(path);
-+            valid &= hooks[i] != NULL;
++            valid &= hooks[hook_count++] != NULL;
 +        }
 +        if (valid) {
 +            // Retained paused frames must be redrawn with the new chain.
@@ -76,10 +78,10 @@
 +            ra_pl_reset(p->ra);
 +            destroy_shader_hooks(&p->shader_hooks, p->num_shader_hooks);
 +            p->shader_hooks = hooks;
-+            p->num_shader_hooks = count;
-+            mp_msg(p->log, MSGL_V, "Applied %d user shader hooks.\n", count);
++            p->num_shader_hooks = hook_count;
++            mp_msg(p->log, MSGL_V, "Applied %d user shader hooks.\n", hook_count);
 +        } else {
-+            destroy_shader_hooks(&hooks, count);
++            destroy_shader_hooks(&hooks, hook_count);
 +            mp_msg(p->log, MSGL_ERR, "Unable to load user shader chain; keeping previous hooks.\n");
 +        }
 +    }
@@ -89,7 +91,7 @@
  
  /**
   * @brief Private data attached to each mp_image pushed into the queue.
-@@ -518,6 +585,7 @@
+@@ -518,6 +587,7 @@
                                 struct mp_hwdec_devices *hwdec_devs) {
      struct pl_video *p = talloc_zero(NULL, struct pl_video);
      p->log = log;
@@ -97,7 +99,7 @@
      p->ra = ra;
      p->ra_ctx = ra_ctx;
      p->hwdec_devs = hwdec_devs;
-@@ -564,6 +632,7 @@
+@@ -564,6 +634,7 @@
          pl_gpu_finish(p->ra->gpu);
  
      ra_next_queue_destroy(&p->queue);
@@ -105,7 +107,7 @@
  
      // Clean up all allocated OSD GPU resources
      for (int i = 0; i < MP_ARRAY_SIZE(p->osd_state_storage.entries); i++) {
-@@ -838,6 +907,7 @@
+@@ -838,6 +909,7 @@
                                                 : NULL;
      update_color_management(p, &target_frame, &params, &peak_params,
                              &color_map_params, source_color);
