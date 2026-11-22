@@ -52,6 +52,7 @@ let
     ''}${pkgs.lib.optionalString (os == oses.macos && variant == variants.video) ''
       patch -p1 <${../../../patches/ffmpeg-macos-curl-use-io-close2.patch}
       patch -p1 <${../../../patches/ffmpeg-macos-mov-bounded-interleave.patch}
+      patch -p1 <${../../../patches/ffmpeg-mpegts-wrapped-webp.patch}
     ''}
 
     # Disable Wunguarded-availability-new warning as error in videotoolboxenc.c to support iOS deployment target of 9.0
