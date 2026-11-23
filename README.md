@@ -1,5 +1,9 @@
 # libmpv build
 
+The `codex/tvos-live-compatibility` branch maintains tvOS in
+`ha1o0/libmpv-darwin-build`; see [TVOS_BUILD.md](TVOS_BUILD.md). iOS and macOS use
+the same repository's `darwin-ios-build` and `darwin-macos-build` branches.
+
 Provides builds of [libmpv](https://github.com/mpv-player/mpv) for macOS & iOS,
 used by [media_kit](https://github.com/alexmercerind/media_kit), compatible
 with commercial use for playback, and GPL use for encoding.

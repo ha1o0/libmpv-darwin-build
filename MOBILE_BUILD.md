@@ -1,5 +1,11 @@
 # Mobile zcopy builds
 
+This branch now maintains tvOS in `ha1o0/libmpv-darwin-build`. See
+[tvOS build instructions](TVOS_BUILD.md) for its package targets and the shared
+Apple repository's platform branches. The earlier iOS release workflow below
+is retained with the imported fork history; current iOS maintenance uses
+`darwin-ios-build` in the Darwin repository.
+
 The build infrastructure is forked from media-kit. Native player source is pinned
 in `mobile-sources.json` to `ha1o0/mpv`, branch `zcopy`, at commit
 `d99d62cc036f269d272d060b32f2b8dd6f631167`. Android and iOS use identical source
