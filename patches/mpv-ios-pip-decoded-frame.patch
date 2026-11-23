@@ -1,8 +1,8 @@
 diff --git a/include/mpv/render.h b/include/mpv/render.h
-index 6a30ff5..4bc58bf 100644
+index 6a30ff5f13..de16667914 100644
 --- a/include/mpv/render.h
 +++ b/include/mpv/render.h
-@@ -451,6 +451,38 @@ typedef enum mpv_render_param_type {
+@@ -451,6 +451,46 @@ typedef enum mpv_render_param_type {
       * complete when mpv_render_context_render() returns.
       */
      MPV_RENDER_PARAM_IOSURFACE = 24,
@@ -27,37 +27,46 @@ index 6a30ff5..4bc58bf 100644
 +    MPV_RENDER_PARAM_IOS_PIP_FRAME = 25,
 +    /**
 +     * iOS PiP software composition on the existing render context.
-+     * Type: int*, set to 1. Requires SKIP_RENDERING to keep the primary GPU
++     * Type: int*, set to 1 or 2. Requires SKIP_RENDERING to keep the primary GPU
 +     * backend idle. Standard SW_SIZE/FORMAT/STRIDE/POINTER parameters render
 +     * a bounded (at most 640 pixels per edge) BGRA/bgr0 target, including OSD
 +     * and rotation, from the same decoded frame. VideoToolbox surfaces are
 +     * mapped read-only, without a full-resolution copy or decoder restart.
 +     * Omitting all SW target parameters only consumes the timed frame.
 +     *
-+     * get_info() writes 1 to an int* to indicate support. Old libraries return
-+     * NOT_IMPLEMENTED, so hosts must probe before suppressing GPU rendering.
++     * The target keeps the source's transfer: a PQ or HLG frame is written as
++     * PQ/HLG code values with BT.2020 primaries. With 1, OSD and subtitles are
++     * blended as plain sRGB values, for hosts that present the result as SDR.
++     * With 2, they are mapped to that HDR transfer at reference white (203
++     * nits for PQ, 75% signal for HLG), for hosts that tag the target as HDR.
++     * SDR frames are composed identically in both modes.
++     *
++     * get_info() writes the highest supported mode to an int* (1 before mode 2
++     * existed). Old libraries return NOT_IMPLEMENTED, so hosts must probe
++     * before suppressing GPU rendering or requesting mode 2.
 +     */
 +    MPV_RENDER_PARAM_IOS_PIP_SW = 26,
  } mpv_render_param_type;
-
+ 
  /**
 diff --git a/video/out/vo_libmpv.c b/video/out/vo_libmpv.c
-index 5f19eb3..ade47aa 100644
+index 5f19eb3311..de1fc5c2bd 100644
 --- a/video/out/vo_libmpv.c
 +++ b/video/out/vo_libmpv.c
-@@ -26,6 +26,11 @@
+@@ -26,6 +26,12 @@
  #include "video/mp_image.h"         // for mp_image_params
  #include "vo.h"                     // for vo, vo_frame, mp_voctrl, vo_frame...
-
+ 
 +#if HAVE_IOS_GL && HAVE_VULKAN
 +#include <CoreVideo/CoreVideo.h>
++#include "sub/draw_bmp.h"
 +#include "video/mp_image_pool.h"
 +#endif
 +
  #if HAVE_MACOS_COCOA_CB
  #include "osdep/mac/app_bridge.h"
  #endif
-@@ -106,6 +111,14 @@ struct mpv_render_context {
+@@ -106,6 +112,17 @@ struct mpv_render_context {
      // --- All of these can only be accessed from mpv_render_*() API, for
      //     which the user makes sure they're called synchronized.
      struct render_backend *renderer;
@@ -68,14 +77,17 @@ index 5f19eb3..ade47aa 100644
 +    struct mp_image_params pip_params;
 +    int pip_w, pip_h, pip_rotation;
 +    struct mp_osd_res pip_osd;
++    struct mp_draw_sub_cache *pip_osd_cache;
++    uint8_t pip_osd_lut[256];
++    enum pl_color_transfer pip_osd_lut_trc;
 +#endif
      struct m_config_cache *vo_opts_cache;
      struct mp_vo_opts *vo_opts;
  };
-@@ -326,6 +339,12 @@ void mpv_render_context_free(mpv_render_context *ctx)
-
+@@ -326,6 +343,12 @@ void mpv_render_context_free(mpv_render_context *ctx)
+ 
      forget_frames(ctx, true);
-
+ 
 +#if HAVE_IOS_GL && HAVE_VULKAN
 +    if (ctx->pip_renderer) {
 +        ctx->pip_renderer->fns->destroy(ctx->pip_renderer);
@@ -85,10 +97,10 @@ index 5f19eb3..ade47aa 100644
      if (ctx->renderer) {
          ctx->renderer->fns->destroy(ctx->renderer);
          talloc_free(ctx->renderer->priv);
-@@ -352,12 +371,244 @@ bool mp_render_context_acquire(mpv_render_context *ctx)
+@@ -352,12 +375,330 @@ bool mp_render_context_acquire(mpv_render_context *ctx)
      return atomic_compare_exchange_strong(&ctx->in_use, &prev, true);
  }
-
+ 
 +#if HAVE_IOS_GL && HAVE_VULKAN
 +// The view and its base addresses live only while the source vo_frame is
 +// retained and the CVPixelBuffer is locked. No second 4K frame is allocated.
@@ -136,6 +148,86 @@ index 5f19eb3..ade47aa 100644
 +        view->stride[n] = stride;
 +    }
 +    return 0;
++}
++
++// The software path keeps an HDR frame's PQ/HLG code values: it only applies
++// the YCbCr matrix. Subtitle bitmaps are sRGB, so blending their code values
++// unchanged would encode white text as the format's peak (10000 nits for PQ).
++// Map them to the frame's transfer at HDR reference white instead.
++static void init_pip_osd_lut(struct mpv_render_context *ctx,
++                             enum pl_color_transfer trc)
++{
++    if (ctx->pip_osd_lut_trc == trc)
++        return;
++    ctx->pip_osd_lut_trc = trc;
++    for (int i = 0; i < 256; i++) {
++        float v = i / 255.0f;
++        float linear = v <= 0.04045f ? v / 12.92f
++                                     : powf((v + 0.055f) / 1.055f, 2.4f);
++        float out;
++        if (trc == PL_COLOR_TRC_PQ) {
++            // SDR white at 203 nits (ITU-R BT.2408) on the 10000 nit PQ scale.
++            float y = linear * 203.0f / 10000.0f;
++            float p = powf(y, 2610.0f / 16384.0f);
++            out = powf((3424.0f / 4096.0f + 2413.0f / 128.0f * p) /
++                       (1.0f + 2392.0f / 128.0f * p), 2523.0f / 32.0f);
++        } else {
++            // HLG reference white is 75% signal: scene light 0.265.
++            float e = linear * 0.265f;
++            out = e <= 1.0f / 12.0f ? sqrtf(3.0f * e)
++                : 0.17883277f * logf(12.0f * e - 0.28466892f) + 0.55991073f;
++        }
++        ctx->pip_osd_lut[i] = lrintf(MPCLAMP(out, 0.0f, 1.0f) * 255.0f);
++    }
++}
++
++// Blend the premultiplied sRGB overlay onto a bgr0/bgra HDR target.
++static void draw_pip_hdr_osd(struct mpv_render_context *ctx, struct osd_state *osd,
++                             double pts, uint8_t *pixels, size_t stride,
++                             int w, int h, enum pl_color_transfer trc)
++{
++    struct sub_bitmap_list *list =
++        osd_render(osd, ctx->pip_osd, pts, 0, mp_draw_sub_formats);
++    if (!list->num_items || list->w != w || list->h != h) {
++        talloc_free(list);
++        return;
++    }
++    if (!ctx->pip_osd_cache)
++        ctx->pip_osd_cache = mp_draw_sub_alloc(ctx, ctx->global);
++    struct mp_rect active[8], modified[8];
++    int num_active = 0, num_modified = 0;
++    struct mp_image *overlay =
++        mp_draw_sub_overlay(ctx->pip_osd_cache, list, active, MP_ARRAY_SIZE(active),
++                            &num_active, modified, MP_ARRAY_SIZE(modified),
++                            &num_modified);
++    if (overlay && overlay->w >= w && overlay->h >= h) {
++        init_pip_osd_lut(ctx, trc);
++        const uint8_t *lut = ctx->pip_osd_lut;
++        for (int n = 0; n < num_active; n++) {
++            struct mp_rect rc = active[n];
++            rc.x0 = MPCLAMP(rc.x0, 0, w);
++            rc.x1 = MPCLAMP(rc.x1, 0, w);
++            rc.y0 = MPCLAMP(rc.y0, 0, h);
++            rc.y1 = MPCLAMP(rc.y1, 0, h);
++            for (int y = rc.y0; y < rc.y1; y++) {
++                const uint8_t *src = overlay->planes[0] + y * overlay->stride[0] + rc.x0 * 4;
++                uint8_t *dst = pixels + y * stride + rc.x0 * 4;
++                for (int x = rc.x0; x < rc.x1; x++, src += 4, dst += 4) {
++                    unsigned a = src[3];
++                    if (!a)
++                        continue;
++                    for (int c = 0; c < 3; c++) {
++                        // Undo premultiplication before the nonlinear mapping.
++                        unsigned straight = a == 255 ? src[c]
++                            : MPMIN(255u, (src[c] * 255u + a / 2) / a);
++                        unsigned mapped = (lut[straight] * a + 127) / 255;
++                        dst[c] = MPMIN(255u, mapped + (dst[c] * (255 - a) + 127) / 255);
++                    }
++                }
++            }
++        }
++    }
++    talloc_free(list);
 +}
 +
 +static int render_pip_sw(struct mpv_render_context *ctx, mpv_render_param *params,
@@ -247,7 +339,13 @@ index 5f19eb3..ade47aa 100644
 +            }
 +        }
 +    }
-+    if (osd) {
++    // Mode 2: the host presents this frame with the source's HDR transfer.
++    int pip_mode = GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_IOS_PIP_SW, int, 0);
++    enum pl_color_transfer trc = image.params.color.transfer;
++    if (osd && pip_mode == 2 &&
++        (trc == PL_COLOR_TRC_PQ || trc == PL_COLOR_TRC_HLG)) {
++        draw_pip_hdr_osd(ctx, osd, image.pts, pixels, *stride, size[0], size[1], trc);
++    } else if (osd) {
 +        struct mp_image target = {0};
 +        struct mp_image_params output = {
 +            .imgfmt = strcmp(format, "bgra") ? IMGFMT_BGR0 : IMGFMT_BGRA,
@@ -291,7 +389,7 @@ index 5f19eb3..ade47aa 100644
  int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
  {
      mp_mutex_lock(&ctx->lock);
-
+ 
      int do_render =
          !GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_SKIP_RENDERING, int, 0);
 +    bool pip_only = false;
@@ -327,13 +425,13 @@ index 5f19eb3..ade47aa 100644
 +        }
 +    }
 +#endif
-
+ 
      if (do_render) {
          int vp_w, vp_h;
-@@ -387,20 +638,22 @@ int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
+@@ -387,20 +728,22 @@ int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
          ctx->need_resize = false;
      }
-
+ 
 -    if (ctx->need_reconfig)
 -        ctx->renderer->fns->reconfig(ctx->renderer, &ctx->img_params);
 -    ctx->need_reconfig = false;
@@ -341,14 +439,14 @@ index 5f19eb3..ade47aa 100644
 +        if (ctx->need_reconfig)
 +            ctx->renderer->fns->reconfig(ctx->renderer, &ctx->img_params);
 +        ctx->need_reconfig = false;
-
+ 
 -    if (ctx->need_update_external)
 -        ctx->renderer->fns->update_external(ctx->renderer, ctx->vo);
 -    ctx->need_update_external = false;
 +        if (ctx->need_update_external)
 +            ctx->renderer->fns->update_external(ctx->renderer, ctx->vo);
 +        ctx->need_update_external = false;
-
+ 
 -    if (ctx->need_reset) {
 -        ctx->renderer->fns->reset(ctx->renderer);
 -        if (ctx->cur_frame)
@@ -361,28 +459,29 @@ index 5f19eb3..ade47aa 100644
 +        ctx->need_reset = false;
      }
 -    ctx->need_reset = false;
-
+ 
      struct vo_frame *frame = ctx->next_frame;
      int64_t wait_present_count = ctx->present_count;
-@@ -429,6 +682,10 @@ int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
-
+@@ -429,6 +772,10 @@ int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
+ 
      if (do_render)
          err = ctx->renderer->fns->render(ctx->renderer, params, frame);
 +#if HAVE_IOS_GL && HAVE_VULKAN
 +    if (pip_sw)
 +        err = render_pip_sw(ctx, params, frame, pip_osd);
 +#endif
-
+ 
      if (frame != &dummy)
          talloc_free(frame);
-@@ -481,6 +738,20 @@ int mpv_render_context_get_info(mpv_render_context *ctx,
+@@ -481,6 +828,21 @@ int mpv_render_context_get_info(mpv_render_context *ctx,
      mp_mutex_lock(&ctx->lock);
-
+ 
      switch (param.type) {
 +#if HAVE_IOS_GL && HAVE_VULKAN
 +    case MPV_RENDER_PARAM_IOS_PIP_SW:
 +        if (param.data) {
-+            *(int *)param.data = 1;
++            // The highest composition mode this library accepts.
++            *(int *)param.data = 2;
 +            res = 0;
 +        } else {
 +            res = MPV_ERROR_INVALID_PARAMETER;

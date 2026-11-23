@@ -73,6 +73,15 @@ renderer and OSD; both PiP APIs defer all primary GPU work until inline
 rendering resumes. Hosts must probe support before bypassing the GPU: old
 libraries ignore unknown render parameters.
 
+The software target keeps the source's transfer: a PQ or HLG frame is written
+as PQ/HLG code values with BT.2020 primaries, because the software path only
+applies the YCbCr matrix. A host that tags the target as HDR requests mode 2,
+which maps sRGB OSD and subtitle bitmaps to that transfer at reference white
+(203 nits for PQ, 75% signal for HLG). Mode 1 blends them unchanged, as before,
+for hosts that present the target as SDR. `get_info()` reports the highest
+supported mode. The target is 8-bit; primaries of coloured subtitles are not
+converted. Dolby Vision profile 5 still needs the GPU path for its reshaping.
+
 The simulator smoke verifies raw-export rejection without consuming a
 software frame, same-context software composition while paused, return to
 Vulkan, and the 4K HEVC Main 10 seek fixture. Physical-device VideoToolbox,
