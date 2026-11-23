@@ -23,7 +23,9 @@ let
   nativeFile = callPackage ../../utils/native-file/default.nix { };
   crossFile = callPackage ../../utils/cross-file/default.nix { };
   xctoolchainLipo = callPackage ../../utils/xctoolchain/lipo.nix { };
-  ffmpeg = callPackage ../mk-pkg-ffmpeg/default.nix { };
+  ffmpeg = callPackage ../mk-pkg-ffmpeg/default.nix {
+    flavor = if os == "tvos" || os == "tvossimulator" then "full" else import ../../utils/default/flavor.nix;
+  };
   uchardet = callPackage ../mk-pkg-uchardet/default.nix { };
   libplacebo = callPackage ../mk-pkg-libplacebo/default.nix { };
   libass = callPackage ../mk-pkg-libass/default.nix { };
@@ -49,6 +51,10 @@ let
     cd $src
     patch -p1 <${../../../patches/mpv-mobile-darwin.patch}
     patch -p1 <${../../../patches/mpv-audiounit-shared-session.patch}
+    if [ "${variant}" == "${variants.video}" ]; then
+      patch -p1 <${../../../patches/mpv-inherit-shared-subtitle-font-resources.patch}
+      patch -p1 <${../../../patches/mpv-restore-frame-color-metadata.patch}
+    fi
     if [ "${variant}" == "${variants.audio}" ]; then
       patch -p1 <${../../../patches/mpv-remove-libass.patch}
     fi
@@ -85,13 +91,18 @@ pkgs.stdenvNoCC.mkDerivation {
       -Dlua=disabled -Diconv=enabled -Dvector=enabled
     )
     if [ "${variant}" == "${variants.video}" ]; then
-      OPTIONS+=(-Duchardet=enabled -Dzlib=enabled -Dgl=enabled -Dplain-gl=enabled)
+      OPTIONS+=(-Duchardet=enabled -Dzlib=enabled)
+      if [ "${os}" == "tvos" ] || [ "${os}" == "tvossimulator" ]; then
+        OPTIONS+=(-Dgl=disabled -Dplain-gl=disabled -Dios-gl=disabled)
+      else
+        OPTIONS+=(-Dgl=enabled -Dplain-gl=enabled)
+      fi
     fi
     if [ "${os}" == "${oses.macos}" ]; then
       OPTIONS+=(-Dcoreaudio=enabled)
     else
       OPTIONS+=(-Daudiounit=enabled)
-      if [ "${variant}" == "${variants.video}" ]; then
+      if [ "${variant}" == "${variants.video}" ] && [ "${os}" != "tvos" ] && [ "${os}" != "tvossimulator" ]; then
         OPTIONS+=(-Dios-gl=enabled)
       fi
     fi

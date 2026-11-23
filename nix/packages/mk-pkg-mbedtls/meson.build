@@ -20,6 +20,8 @@ options.add_cmake_defines({
     'USE_STATIC_MBEDTLS_LIBRARY': false,
     'USE_SHARED_MBEDTLS_LIBRARY': true,
     'LINK_WITH_PTHREAD': true,
+    'ENABLE_PROGRAMS': not meson.get_cross_property('is_tvos', false),
+    'ENABLE_TESTING': not meson.get_cross_property('is_tvos', false),
 })
 
 mbedtls = cmake.subproject('mbedtls',
