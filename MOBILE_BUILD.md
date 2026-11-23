@@ -29,6 +29,16 @@ The iOS recipe requests Metal-compatible VideoToolbox buffers with the OpenGL
 ES attribute preserved for the fallback. This follows the same Metal buffer
 requirement as MPVKit, but keeps the `libmpv` IOSurface target for Flutter and
 AVKit instead of rendering directly into MPVKit's `CAMetalLayer` swapchain.
+
+### HDR10 / HLG IOSurface targets
+
+The iOS video producer also accepts an RGBA16F IOSurface target through
+`MPV_RENDER_PARAM_IOSURFACE_COLOR_SPACE`. `HDR10` and `HLG` target values keep
+libmpv's gpu-next/libplacebo compositor active, so libass text, bitmap/PGS
+subtitles and OSD stay in the same final frame. The existing 32BGRA target and
+SDR path remain unchanged. A consumer must present the RGBA16F target through
+an EDR-capable native Metal layer; Flutter's ordinary 8-bit texture contract
+does not provide HDR presentation by itself.
 libplacebo negotiates Vulkan portability and Metal import extensions. The
 offscreen backend reuses at most four imported targets and retires them when
 the target size changes or the renderer is destroyed. It still completes GPU

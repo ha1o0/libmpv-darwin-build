@@ -70,6 +70,7 @@ let
       patch -p1 <${../../../patches/mpv-ios-pip-decoded-frame.patch}
       patch -p1 <${../../../patches/mpv-ios-memory-pressure.patch}
       patch -p1 <${../../../patches/mpv-ios-user-shaders.patch}
+      patch -p1 <${../../../patches/mpv-iosurface-hdr.patch}
     ''}
     if [ "${variant}" == "${variants.audio}" ]; then
       patch -p1 <${../../../patches/mpv-remove-libass.patch}

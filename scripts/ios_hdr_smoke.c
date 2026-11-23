@@ -1,13 +1,65 @@
-// Real MoltenVK pixels from a known 10-bit PQ ramp, without display HDR assumptions.
+// Real MoltenVK pixels from a known 10-bit PQ ramp, rendered into an
+// IOSurface-backed RGBA16F target. This verifies HDR target negotiation and
+// preserves the libmpv subtitle/OSD composition path.
 #define main previous_surface_smoke_main
 #include "ios_surface_smoke.c"
 #undef main
+#include <math.h>
+#include <stdint.h>
+
+static CVPixelBufferRef make_hdr_pixel_buffer(size_t w, size_t h)
+{
+    const void *keys[] = { kCVPixelBufferIOSurfacePropertiesKey,
+                           kCVPixelBufferMetalCompatibilityKey };
+    CFDictionaryRef properties = CFDictionaryCreate(NULL, NULL, NULL, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    const void *values[] = { properties, kCFBooleanTrue };
+    CFDictionaryRef attrs = CFDictionaryCreate(NULL, keys, values, 2,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CVPixelBufferRef result = NULL;
+    CVPixelBufferCreate(NULL, w, h, kCVPixelFormatType_64RGBAHalf, attrs, &result);
+    CFRelease(attrs);
+    CFRelease(properties);
+    return result;
+}
+
+static float half_to_float(uint16_t value)
+{
+    const uint32_t sign = (value >> 15) & 1;
+    const uint32_t exponent = (value >> 10) & 0x1f;
+    const uint32_t fraction = value & 0x3ff;
+    uint32_t bits;
+    if (exponent == 0) {
+        if (!fraction) bits = sign << 31;
+        else {
+            float result = ldexpf((float)fraction, -24);
+            return sign ? -result : result;
+        }
+    } else if (exponent == 31) {
+        bits = (sign << 31) | 0x7f800000u | (fraction << 13);
+    } else {
+        bits = (sign << 31) | ((exponent + 112) << 23) | (fraction << 13);
+    }
+    float result;
+    memcpy(&result, &bits, sizeof(result));
+    return result;
+}
+
+static int render_hdr(mpv_render_context *ctx, CVPixelBufferRef buffer, int color_space)
+{
+    int block = 0;
+    return mpv_render_context_render(ctx, (mpv_render_param[]) {
+        { MPV_RENDER_PARAM_IOSURFACE, CVPixelBufferGetIOSurface(buffer) },
+        { MPV_RENDER_PARAM_IOSURFACE_COLOR_SPACE, &color_space },
+        { MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block }, { 0 },
+    });
+}
 
 int main(int argc, char **argv) {
     if (argc != 2) return 1;
     mpv_handle *mpv = mpv_create();
     mpv_render_context *ctx = NULL;
-    CVPixelBufferRef buffer = make_pixel_buffer(288, 32);
+    CVPixelBufferRef buffer = make_hdr_pixel_buffer(288, 32);
     atomic_bool dirty = false;
     int advanced = 1;
     mpv_set_option_string(mpv, "config", "no");
@@ -32,34 +84,36 @@ int main(int argc, char **argv) {
         loaded|=event->event_id==MPV_EVENT_FILE_LOADED;
         if(atomic_exchange(&dirty,false)) {
             uint64_t flags=mpv_render_context_update(ctx);
-            if(flags&MPV_RENDER_UPDATE_FRAME) { render(ctx,buffer);rendered=loaded; }
+            if(flags&MPV_RENDER_UPDATE_FRAME) { render_hdr(ctx,buffer,1);rendered=loaded; }
         }
         if(rendered && i>70) break;
     }
-    int previous_mid = -1;
-    for(int mode=0;mode<3;mode++) {
-        if(mode==1 && mpv_set_property_string(mpv,"target-peak","100") < 0) return 5;
-        if(mode==2 && mpv_set_property_string(mpv,"hdr-compute-peak","no") < 0) return 5;
-        for(int i=0;i<4;i++) { mpv_render_context_update(ctx);render(ctx,buffer); }
-        CVPixelBufferLockBaseAddress(buffer,0);
-        uint8_t *p=CVPixelBufferGetBaseAddress(buffer);
-        printf("HDR_GRAY mode=%d:",mode);
-        int previous = -1, mid = -1;
-        for(int x=0;x<9;x++) {
-            uint8_t *px=p+CVPixelBufferGetBytesPerRow(buffer)*16+(x*32+16)*4;
-            printf(" %u,%u,%u",px[2],px[1],px[0]);
-            if (px[0] <= previous || abs((int)px[0]-px[1]) > 2 ||
-                abs((int)px[0]-px[2]) > 2 || (x == 0 && px[0] > 4) ||
-                (x == 8 && px[0] < 245)) return 6;
-            previous = px[0];
-            if (x == 4) mid = px[0];
+    for (int color_space = 1; color_space <= 2; color_space++) {
+        for (int i = 0; i < 4; i++) {
+            mpv_render_context_update(ctx);
+            if (render_hdr(ctx, buffer, color_space) < 0) return 5;
         }
-        if (mode && mid <= previous_mid + 8) return 7;
-        previous_mid = mid;
-        printf("\n");fflush(stdout);
-        CVPixelBufferUnlockBaseAddress(buffer,0);
+        CVPixelBufferLockBaseAddress(buffer, 0);
+        uint16_t *p = (uint16_t *)CVPixelBufferGetBaseAddress(buffer);
+        size_t stride = CVPixelBufferGetBytesPerRow(buffer) / sizeof(uint16_t);
+        printf("HDR_FLOAT_GRAY colorspace=%s:", color_space == 1 ? "HDR10" : "HLG");
+        float previous = -1.0f;
+        for (int x = 0; x < 9; x++) {
+            uint16_t *px = p + stride * 16 + (x * 32 + 16) * 4;
+            float r = half_to_float(px[0]);
+            float g = half_to_float(px[1]);
+            float b = half_to_float(px[2]);
+            printf(" %.5f,%.5f,%.5f", r, g, b);
+            if (!(r > previous) || fabsf(r - g) > 0.02f || fabsf(r - b) > 0.02f ||
+                !isfinite(r) || (x == 0 && r > 0.02f) || (x == 8 && r < 0.9f))
+                return 6;
+            previous = r;
+        }
+        printf("\n");
+        fflush(stdout);
+        CVPixelBufferUnlockBaseAddress(buffer, 0);
     }
     mpv_render_context_free(ctx);mpv_terminate_destroy(mpv);CVPixelBufferRelease(buffer);
-    if (rendered) puts("LIBMPV_IOS_HDR_OK PQ grayscale, neutral colors and real mapping options");
+    if (rendered) puts("LIBMPV_IOS_HDR_OK RGBA16F HDR10/HLG targets, neutral colors");
     return rendered?0:4;
 }

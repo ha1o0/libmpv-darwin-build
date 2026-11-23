@@ -1,0 +1,205 @@
+--- a/include/mpv/render.h
++++ b/include/mpv/render.h
+@@ -483,8 +483,21 @@
+      * NOT_IMPLEMENTED, so hosts must probe before suppressing GPU rendering.
+      */
+     MPV_RENDER_PARAM_IOS_PIP_SW = 26,
++    /**
++     * iOS IOSurface output color space. Valid for
++     * MPV_RENDER_API_TYPE_IOSURFACE and mpv_render_context_render().
++     * Type: int*. Use MPV_RENDER_IOSURFACE_COLOR_SPACE_*.
++     */
++    MPV_RENDER_PARAM_IOSURFACE_COLOR_SPACE = 27,
+ } mpv_render_param_type;
+
++/** Values for MPV_RENDER_PARAM_IOSURFACE_COLOR_SPACE. */
++typedef enum mpv_render_iosurface_color_space {
++    MPV_RENDER_IOSURFACE_COLOR_SPACE_SDR = 0,
++    MPV_RENDER_IOSURFACE_COLOR_SPACE_HDR10 = 1,
++    MPV_RENDER_IOSURFACE_COLOR_SPACE_HLG = 2,
++} mpv_render_iosurface_color_space;
++
+ /**
+  * For backwards compatibility with the old naming of
+  * MPV_RENDER_PARAM_DRM_DRAW_SURFACE_SIZE
+--- a/video/out/gpu_next/context.c
++++ b/video/out/gpu_next/context.c
+@@ -578,6 +578,7 @@
+
+ #if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
+ #include <IOSurface/IOSurfaceRef.h>
++#include <CoreVideo/CVPixelBuffer.h>
+ #include <libplacebo/vulkan.h>
+ #include "video/out/placebo/ra_pl.h"
+
+@@ -593,7 +594,8 @@
+     pl_log log;
+     pl_vk_inst instance;
+     pl_vulkan device;
+-    pl_fmt format;
++    pl_fmt bgra_format;
++    pl_fmt hdr_format;
+     int width, height;
+     unsigned next_target;
+     struct iosurface_target targets[IOSURFACE_TARGETS];
+@@ -651,9 +653,10 @@
+         goto fail;
+
+     ctx->gpu = p->device->gpu;
+-    p->format = pl_find_named_fmt(ctx->gpu, "bgra8");
++    p->bgra_format = pl_find_named_fmt(ctx->gpu, "bgra8");
++    p->hdr_format = pl_find_named_fmt(ctx->gpu, "rgba16f");
+     if (!(ctx->gpu->import_caps.tex & PL_HANDLE_IOSURFACE) ||
+-        !p->format || !(p->format->caps & PL_FMT_CAP_RENDERABLE))
++        !p->bgra_format || !(p->bgra_format->caps & PL_FMT_CAP_RENDERABLE))
+         goto fail;
+
+     ctx->ra = ra_pl_create(ctx->gpu, ctx->log, p->log);
+@@ -675,14 +678,38 @@
+ static int iosurface_size(mpv_render_param *params, int *w, int *h)
+ {
+     IOSurfaceRef surface = get_mpv_render_param(params, MPV_RENDER_PARAM_IOSURFACE, NULL);
+-    if (!surface || IOSurfaceGetPixelFormat(surface) != 0x42475241 || // 'BGRA'
+-        IOSurfaceGetPlaneCount(surface) || !IOSurfaceGetWidth(surface) ||
++    if (!surface || IOSurfaceGetPlaneCount(surface) || !IOSurfaceGetWidth(surface) ||
+         !IOSurfaceGetHeight(surface) || IOSurfaceGetWidth(surface) > INT32_MAX ||
+         IOSurfaceGetHeight(surface) > INT32_MAX)
+         return MPV_ERROR_INVALID_PARAMETER;
++    OSType format = IOSurfaceGetPixelFormat(surface);
++    if (format != kCVPixelFormatType_32BGRA &&
++        format != kCVPixelFormatType_64RGBAHalf)
++        return MPV_ERROR_UNSUPPORTED;
+     *w = IOSurfaceGetWidth(surface);
+     *h = IOSurfaceGetHeight(surface);
+     return 0;
++}
++
++static int iosurface_color_space(mpv_render_param *params)
++{
++    int *value = get_mpv_render_param(params, MPV_RENDER_PARAM_IOSURFACE_COLOR_SPACE, NULL);
++    return value ? *value : MPV_RENDER_IOSURFACE_COLOR_SPACE_SDR;
++}
++
++static void iosurface_set_target_color(struct libmpv_gpu_next_context *ctx, int mode)
++{
++    switch (mode) {
++    case MPV_RENDER_IOSURFACE_COLOR_SPACE_HDR10:
++        ctx->target_color = pl_color_space_hdr10;
++        break;
++    case MPV_RENDER_IOSURFACE_COLOR_SPACE_HLG:
++        ctx->target_color = pl_color_space_bt2020_hlg;
++        break;
++    default:
++        ctx->target_color = pl_color_space_srgb;
++        break;
++    }
+ }
+
+ static int iosurface_wrap(struct libmpv_gpu_next_context *ctx,
+@@ -694,6 +721,15 @@
+     if (err < 0)
+         return err;
+     IOSurfaceRef surface = get_mpv_render_param(params, MPV_RENDER_PARAM_IOSURFACE, NULL);
++    OSType surface_format = IOSurfaceGetPixelFormat(surface);
++    int color_space = iosurface_color_space(params);
++    if (surface_format == kCVPixelFormatType_32BGRA &&
++        color_space != MPV_RENDER_IOSURFACE_COLOR_SPACE_SDR)
++        return MPV_ERROR_INVALID_PARAMETER;
++    if (surface_format == kCVPixelFormatType_64RGBAHalf &&
++        (!p->hdr_format || !(p->hdr_format->caps & PL_FMT_CAP_RENDERABLE)))
++        return MPV_ERROR_UNSUPPORTED;
++    iosurface_set_target_color(ctx, color_space);
+     if (w != p->width || h != p->height) {
+         iosurface_drop_targets(ctx);
+         p->width = w;
+@@ -711,8 +747,10 @@
+     unsigned index = p->next_target++ % IOSURFACE_TARGETS;
+     // Release the old import before allocating a replacement.
+     iosurface_drop_target(ctx, index);
++    pl_fmt format = surface_format == kCVPixelFormatType_64RGBAHalf
++        ? p->hdr_format : p->bgra_format;
+     pl_tex texture = pl_tex_create(ctx->gpu, pl_tex_params(
+-        .w = w, .h = h, .format = p->format, .renderable = true, .blit_dst = true,
++        .w = w, .h = h, .format = format, .renderable = true, .blit_dst = true,
+         .import_handle = PL_HANDLE_IOSURFACE,
+         .shared_mem.handle.handle = (void *) surface,
+         .shared_mem.size = IOSurfaceGetAllocSize(surface),
+--- a/video/out/gpu_next/libmpv_gpu_next.c
++++ b/video/out/gpu_next/libmpv_gpu_next.c
+@@ -74,6 +74,7 @@
+                 .global = ctx->global,
+                 .log = mp_log_new(p, ctx->log, "gpu-next-ctx"),
+                 .fns = backend,
++                .target_color = pl_color_space_srgb,
+             };
+             break;
+         }
+@@ -147,7 +148,7 @@
+     if (!target_tex) return MPV_ERROR_GENERIC;
+
+     // Render the video frame.
+-    pl_video_render(p->video_engine, frame, target_tex);
++    pl_video_render(p->video_engine, frame, target_tex, &p->context->target_color);
+
+     if (!p->context->fns->retains_wrapped_targets)
+         ra_next_tex_destroy(p->context->ra, &target_tex);
+--- a/video/out/gpu_next/libmpv_gpu_next.h
++++ b/video/out/gpu_next/libmpv_gpu_next.h
+@@ -1,6 +1,7 @@
+ #pragma once
+
+ #include <libplacebo/gpu.h>  // for pl_gpu, pl_tex
++#include <libplacebo/colorspace.h> // for pl_color_space
+ #include "mpv/render.h"      // for mpv_render_param
+
+ struct ra_ctx;
+@@ -24,6 +25,9 @@
+     struct ra_next *ra;
+     // The underlying GPU object, needed by the Host for resource management.
+     pl_gpu gpu;
++
++    // Color space of the current render target.
++    struct pl_color_space target_color;
+ };
+
+ /**
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -844,14 +844,15 @@
+  * @param frame The mpv frame to render, containing the current image.
+  * @param target_tex The destination GPU texture to render to.
+  */
+-void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex)
++void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex,
++                     const struct pl_color_space *target_color)
+ {
+     // Describe the target surface for libplacebo.
+     struct pl_frame target_frame = {
+         .num_planes = 1,
+         .planes[0] = { .texture = target_tex, .components = 4, .component_mapping = {0,1,2,3} },
+         .crop = { .x0 = p->current_dst.x0, .y0 = p->current_dst.y0, .x1 = p->current_dst.x1, .y1 = p->current_dst.y1 },
+-        .color = pl_color_space_srgb,
++        .color = target_color ? *target_color : pl_color_space_srgb,
+         .repr = pl_color_repr_rgb,
+     };
+
+--- a/video/out/gpu_next/video.h
++++ b/video/out/gpu_next/video.h
+@@ -2,6 +2,7 @@
+
+ #include "stdbool.h"         // for bool
+ #include <libplacebo/gpu.h>  // for pl_gpu, pl_tex
++#include <libplacebo/colorspace.h> // for pl_color_space
+
+ // Forward declarations
+ struct mp_image_params;
+@@ -30,7 +31,8 @@
+ /**
+  * Synchronously renders a video frame to a display target using libplacebo.
+  */
+-void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex);
++void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex,
++                     const struct pl_color_space *target_color);
+
+ /**
+  * Synchronously renders `frame` into an sRGB temporary and returns a newly
