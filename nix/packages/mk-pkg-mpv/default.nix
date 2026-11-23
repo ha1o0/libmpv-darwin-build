@@ -31,6 +31,7 @@ let
   uchardet = callPackage ../mk-pkg-uchardet/default.nix { };
   libplacebo = callPackage ../mk-pkg-libplacebo/default.nix { };
   libass = callPackage ../mk-pkg-libass/default.nix { };
+  curl = callPackage ../mk-pkg-curl/default.nix { };
 
   nativeBuildInputs = [
     pkgs.meson
@@ -53,7 +54,16 @@ let
     cd $src
     patch -p1 <${../../../patches/mpv-mobile-darwin.patch}
     patch -p1 <${../../../patches/mpv-audiounit-shared-session.patch}
+    ${pkgs.lib.optionalString (variant == variants.video) ''
+      patch -p1 <${../../../patches/mpv-inherit-shared-subtitle-font-resources.patch}
+      patch -p1 <${../../../patches/mpv-restore-frame-color-metadata.patch}
+    ''}
     ${pkgs.lib.optionalString iosMetal ''
+      patch -p1 <${../../../patches/mpv-ios-curl-static.patch}
+      patch -p1 <${../../../patches/mpv-mobile-curl-routing.patch}
+      patch -p1 <${../../../patches/mpv-mobile-curl-network-policy.patch}
+      patch -p1 <${../../../patches/mpv-mobile-curl-initial-position.patch}
+      patch -p1 <${../../../patches/mpv-mobile-curl-lavf-policy.patch}
       patch -p1 <${../../../patches/mpv-iosurface-render.patch}
       patch -p1 <${../../../patches/mpv-iosurface-reuse.patch}
       patch -p1 <${../../../patches/mpv-ios-metal-packed-frames.patch}
@@ -84,7 +94,7 @@ pkgs.stdenvNoCC.mkDerivation {
   enableParallelBuilding = true;
   inherit nativeBuildInputs;
   buildInputs =
-    [ ffmpeg libplacebo ] ++ pkgs.lib.optionals iosMetal [ moltenvk ]
+    [ ffmpeg libplacebo ] ++ pkgs.lib.optionals iosMetal [ moltenvk curl ]
     ++ pkgs.lib.optionals (variant == "video") [
       uchardet
       libass
@@ -106,6 +116,7 @@ pkgs.stdenvNoCC.mkDerivation {
       if [ "${variant}" == "${variants.video}" ]; then
         OPTIONS+=(-Dios-gl=enabled)
         ${pkgs.lib.optionalString iosMetal "OPTIONS+=(-Dvulkan=enabled -Dvideotoolbox-pl=enabled)"}
+        ${pkgs.lib.optionalString iosMetal "OPTIONS+=(-Dlibcurl=enabled)"}
       fi
     fi
 
@@ -118,6 +129,10 @@ pkgs.stdenvNoCC.mkDerivation {
   '';
   buildPhase = ''
     meson compile -vC build
+    ${pkgs.lib.optionalString iosMetal ''
+      grep -Eq '^#define HAVE_LIBCURL 1$' build/config.h
+      grep -Fq 'libcurl' configure.log
+    ''}
   '';
   installPhase = ''
     meson install -C build

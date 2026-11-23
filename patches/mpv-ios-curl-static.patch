@@ -1,0 +1,12 @@
+diff --git a/meson.build b/meson.build
+--- a/meson.build
++++ b/meson.build
+@@ -628,7 +628,7 @@ if darwin
+     subdir(join_paths('TOOLS', 'osxbundle'))
+ endif
+ 
+-libcurl = dependency('libcurl', version: '>= 7.88.0', required: get_option('libcurl'))
++libcurl = dependency('libcurl', version: '>= 7.88.0', required: get_option('libcurl'), static: true)
+ features += {'libcurl': libcurl.found()}
+ if features['libcurl']
+     dependencies += [libcurl]

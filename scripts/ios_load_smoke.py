@@ -7,6 +7,7 @@ from pathlib import Path
 import platform
 import plistlib
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -63,13 +64,18 @@ int main(void) {
   if (option(handle, "secondary-sub-style", "independent") < 0 ||
       option(handle, "secondary-sub-scale", "1.25") < 0) return 6;
   int result = initialize(handle);
+  int64_t cache_version = 0;
+  if (!get || get(handle, "floe-cache-version", 4, &cache_version) < 0 ||
+      cache_version != 4) {
+    fprintf(stderr, "Missing working Floe cache v4 / libcurl backend\n"); return 9;
+  }
   int64_t threads = 0, frames = 0;
   if (!get || get(handle, "options/hwdec-threads", 4, &threads) < 0 ||
       get(handle, "options/hwdec-extra-frames", 4, &frames) < 0 ||
       threads != 1 || frames != 2) return 7;
   destroy(handle);
   if (result < 0) { fprintf(stderr, "mpv_initialize: %d\n", result); return 5; }
-  printf("LIBMPV_IOS_LOAD_OK api=%lu\n", version());
+  printf("LIBMPV_IOS_LOAD_OK api=%lu cache=%lld\n", version(), (long long)cache_version);
   dlclose(library);
   return 0;
 }
@@ -165,6 +171,32 @@ def main():
                 '-Wl,-rpath,@executable_path/Frameworks', str(source.with_name('ios_shader_smoke.c')),
                 *extra, '-o', str(shader_executable)], check=True)
             subprocess.run(['codesign', '--force', '--sign', '-', str(shader_executable)], check=True)
+        hdr_executable = None
+        target_executable = None
+        if args.iosurface:
+            hdr_pattern = directory / 'hdr-pq.y4m'
+            # ST 2084 nits encoded into a limited-range 10-bit luma ramp.
+            nits = [0, 1, 10, 50, 100, 203, 400, 1000, 4000]
+            m1, m2 = 2610 / 16384, 2523 / 32
+            c1, c2, c3 = 3424 / 4096, 2413 / 128, 2392 / 128
+            codes = [round(64 + 876 * ((c1 + c2 * (n / 10000) ** m1) /
+                                      (1 + c3 * (n / 10000) ** m1)) ** m2) for n in nits]
+            row = b''.join(struct.pack('<H', code) * 32 for code in codes)
+            frame = row * 32 + struct.pack('<H', 512) * (288 * 32 // 2)
+            hdr_pattern.write_bytes(b'YUV4MPEG2 W288 H32 F25:1 Ip A1:1 C420p10\n' +
+                                    (b'FRAME\n' + frame) * 4)
+            hdr_executable = directory / 'hdr-smoke'
+            subprocess.run(['xcrun', '--sdk', 'iphonesimulator', 'clang', '-target', f'{arch}-apple-ios15.0-simulator',
+                '-isysroot', run(['xcrun', '--sdk', 'iphonesimulator', '--show-sdk-path']),
+                '-Wl,-rpath,@executable_path/Frameworks', str(source.with_name('ios_hdr_smoke.c')),
+                *extra, '-o', str(hdr_executable)], check=True)
+            subprocess.run(['codesign', '--force', '--sign', '-', str(hdr_executable)], check=True)
+            target_executable = directory / 'mobile-target-smoke'
+            subprocess.run(['xcrun', '--sdk', 'iphonesimulator', 'clang', '-target', f'{arch}-apple-ios15.0-simulator',
+                '-isysroot', run(['xcrun', '--sdk', 'iphonesimulator', '--show-sdk-path']),
+                '-Wl,-rpath,@executable_path/Frameworks', str(source.with_name('ios_mobile_target_smoke.c')),
+                *extra, '-o', str(target_executable)], check=True)
+            subprocess.run(['codesign', '--force', '--sign', '-', str(target_executable)], check=True)
         device = args.device or run(['xcrun', 'simctl', 'create', f'libmpv-validation-{os.getpid()}', device_type, runtime])
         try:
             if not args.device:
@@ -204,6 +236,22 @@ def main():
                 if completed.returncode or marker not in completed.stdout:
                     raise RuntimeError(f'Simulator did not confirm {marker}:\n{completed.stdout}')
                 print(next(line for line in completed.stdout.splitlines() if marker in line))
+            if hdr_executable:
+                completed = subprocess.run(['xcrun', 'simctl', 'spawn', device, str(hdr_executable), str(hdr_pattern)],
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+                marker = 'LIBMPV_IOS_HDR_OK'
+                if completed.returncode or marker not in completed.stdout:
+                    raise RuntimeError(f'Simulator did not confirm {marker}:\n{completed.stdout}')
+                print(next(line for line in completed.stdout.splitlines() if marker in line))
+            if target_executable:
+                completed = subprocess.run(['xcrun', 'simctl', 'spawn', device, str(target_executable),
+                    str(pattern), str(hdr_pattern)], text=True, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, timeout=120)
+                marker = 'LIBMPV_IOS_MOBILE_TARGET_OK'
+                if completed.returncode or marker not in completed.stdout:
+                    raise RuntimeError(f'Simulator did not confirm {marker}:\n{completed.stdout}')
+                for line in completed.stdout.splitlines():
+                    if marker in line or 'MOBILE_SDR_TARGET hdr=' in line: print(line)
         finally:
             if not args.device:
                 subprocess.run(['xcrun', 'simctl', 'shutdown', device], check=False,

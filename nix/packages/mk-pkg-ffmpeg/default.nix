@@ -45,6 +45,7 @@ let
 
     cd $src
     patch -p1 <${../../../patches/ffmpeg-fix-vp9-hwaccel.patch}
+    patch -p1 <${../../../patches/ffmpeg-mpegts-wrapped-webp.patch}
     ${pkgs.lib.optionalString iosVideo "patch -p1 <${../../../patches/ffmpeg-ios-metal-compatibility.patch}"}
     # Keep the legacy GLES HDR workaround outside the iOS Metal video build.
     # FFmpeg 9 supplies P010 and already escapes DASH base URLs.
