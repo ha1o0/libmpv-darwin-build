@@ -55,6 +55,75 @@ static int render_hdr(mpv_render_context *ctx, CVPixelBufferRef buffer, int colo
     });
 }
 
+static bool read_gray(CVPixelBufferRef buffer, float pixels[9][3])
+{
+    if (CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly))
+        return false;
+    uint16_t *base = CVPixelBufferGetBaseAddress(buffer);
+    size_t stride = CVPixelBufferGetBytesPerRow(buffer) / sizeof(uint16_t);
+    for (int x = 0; x < 9; x++)
+        for (int c = 0; c < 3; c++)
+            pixels[x][c] = half_to_float(base[stride * 16 + (x * 32 + 16) * 4 + c]);
+    CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
+    return true;
+}
+
+static bool verify_passthrough_contract(mpv_handle *mpv, mpv_render_context *ctx,
+                                        CVPixelBufferRef buffer)
+{
+    float reference[9][3], changed[9][3];
+    if (render_hdr(ctx, buffer, 1) < 0 || !read_gray(buffer, reference))
+        return false;
+    // PQ code values for 203 and 4000 nit must survive, not be compressed to
+    // a default 1000-nit display. Quantization of the 10-bit YUV input is allowed.
+    if (fabsf(reference[5][0] - 0.58069f) > 0.005f ||
+        fabsf(reference[8][0] - 0.90257f) > 0.005f)
+        return false;
+    if (CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly))
+        return false;
+    uint16_t *base = CVPixelBufferGetBaseAddress(buffer);
+    size_t stride = CVPixelBufferGetBytesPerRow(buffer) / sizeof(uint16_t);
+    bool primary_ok = true;
+    for (int x = 0; x < 3; x++)
+        for (int c = 0; c < 3; c++) {
+            float value = half_to_float(base[stride * 4 + (x * 32 + 16) * 4 + c]);
+            primary_ok &= fabsf(value - (x == c ? 0.58069f : 0.0f)) < 0.01f;
+        }
+    CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
+    if (!primary_ok) return false;
+    // Reproduce the app's conflicting SDR options. The explicit native HDR
+    // surface contract wins; the layer must never receive mislabeled SDR.
+    const char *options[][2] = {
+        {"target-prim", "bt.709"}, {"target-trc", "srgb"}, {"target-peak", "203"},
+        {"tone-mapping", "hable"}, {"tone-mapping", "reinhard"},
+        {"tone-mapping", "clip"}, {"hdr-compute-peak", "yes"},
+    };
+    for (unsigned i = 0; i < sizeof(options) / sizeof(options[0]); i++) {
+        if (mpv_set_property_string(mpv, options[i][0], options[i][1]) < 0)
+            return false;
+        for (int n = 0; n < 3; n++)
+            if (render_hdr(ctx, buffer, 1) < 0) return false;
+        if (!read_gray(buffer, changed)) return false;
+        for (int x = 0; x < 9; x++)
+            for (int c = 0; c < 3; c++)
+                if (fabsf(changed[x][c] - reference[x][c]) > 0.002f)
+                    return false;
+    }
+    if (render_hdr(ctx, buffer, 99) != MPV_ERROR_INVALID_PARAMETER)
+        return false;
+    for (int n = 0; n < 3; n++)
+        if (render_hdr(ctx, buffer, 0) < 0) return false;
+    if (!read_gray(buffer, changed) || fabsf(changed[8][0] - reference[8][0]) < 0.02f)
+        return false;
+    mpv_set_property_string(mpv, "target-prim", "auto");
+    mpv_set_property_string(mpv, "target-trc", "auto");
+    mpv_set_property_string(mpv, "target-peak", "auto");
+    mpv_set_property_string(mpv, "tone-mapping", "auto");
+    mpv_set_property_string(mpv, "hdr-compute-peak", "auto");
+    puts("LIBMPV_IOS_HDR_CONTRACT_OK PQ values preserved; SDR overrides and tone curves cannot mislabel HDR");
+    return true;
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) return 1;
     mpv_handle *mpv = mpv_create();
@@ -88,6 +157,7 @@ int main(int argc, char **argv) {
         }
         if(rendered && i>70) break;
     }
+    if (!verify_passthrough_contract(mpv, ctx, buffer)) return 7;
     for (int color_space = 1; color_space <= 2; color_space++) {
         for (int i = 0; i < 4; i++) {
             mpv_render_context_update(ctx);

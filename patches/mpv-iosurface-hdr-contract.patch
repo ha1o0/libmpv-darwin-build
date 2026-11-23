@@ -1,0 +1,44 @@
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -928,6 +928,29 @@
+                                                : NULL;
+     update_color_management(p, &target_frame, &params, &peak_params,
+                             &color_map_params, source_color);
++
++#if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
++    // The native IOSurface consumer tags these pixels as PQ/HLG. Generic mpv
++    // target-* overrides must not silently replace that transfer/primaries
++    // with SDR while the layer keeps its HDR tag. Screenshots and SDR targets
++    // keep their existing options and tone-mapping behavior.
++    if (p->ra_ctx && ra_pl_get(p->ra_ctx->ra) == p->ra->gpu && target_color &&
++        pl_color_transfer_is_hdr(target_color->transfer))
++    {
++        target_frame.color = *target_color;
++        if (source_color && source_color->transfer == target_color->transfer) {
++            // Source passthrough preserves mastering luminance, rather than
++            // mapping to libplacebo's default display peak before CoreAnimation
++            // maps to the physical panel. Color conversion and OSD stay active.
++            target_frame.color.hdr = source_color->hdr;
++            params.peak_detect_params = NULL;
++            color_map_params.tone_mapping_function = &pl_tone_map_clip;
++            color_map_params.inverse_tone_mapping = false;
++            color_map_params.contrast_recovery = 0.0f;
++            color_map_params.visualize_lut = false;
++        }
++    }
++#endif
+     update_shader_hooks(p, &params);
+ 
+ #if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
+--- a/video/out/gpu_next/context.c
++++ b/video/out/gpu_next/context.c
+@@ -723,6 +723,9 @@
+     IOSurfaceRef surface = get_mpv_render_param(params, MPV_RENDER_PARAM_IOSURFACE, NULL);
+     OSType surface_format = IOSurfaceGetPixelFormat(surface);
+     int color_space = iosurface_color_space(params);
++    if (color_space < MPV_RENDER_IOSURFACE_COLOR_SPACE_SDR ||
++        color_space > MPV_RENDER_IOSURFACE_COLOR_SPACE_HLG)
++        return MPV_ERROR_INVALID_PARAMETER;
+     if (surface_format == kCVPixelFormatType_32BGRA &&
+         color_space != MPV_RENDER_IOSURFACE_COLOR_SPACE_SDR)
+         return MPV_ERROR_INVALID_PARAMETER;

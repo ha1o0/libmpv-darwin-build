@@ -182,7 +182,22 @@ def main():
             codes = [round(64 + 876 * ((c1 + c2 * (n / 10000) ** m1) /
                                       (1 + c3 * (n / 10000) ** m1)) ** m2) for n in nits]
             row = b''.join(struct.pack('<H', code) * 32 for code in codes)
-            frame = row * 32 + struct.pack('<H', 512) * (288 * 32 // 2)
+            # Add BT.2020 primaries above the neutral ramp. Gray alone cannot
+            # detect swapped channels or a primaries/tagging mismatch.
+            primaries = [(0.58069, 0, 0), (0, 0.58069, 0), (0, 0, 0.58069)]
+            yuv = []
+            for red, green, blue in primaries:
+                luma = 0.2627 * red + 0.6780 * green + 0.0593 * blue
+                yuv.append((round(64 + 876 * luma),
+                            round(512 + 448 * (blue - luma) / (1 - 0.0593)),
+                            round(512 + 448 * (red - luma) / (1 - 0.2627))))
+            color_row = b''.join(struct.pack('<H', value[0]) * 32 for value in yuv) + row[192:]
+            chroma = b''
+            for component in (1, 2):
+                color_chroma = b''.join(struct.pack('<H', value[component]) * 16 for value in yuv)
+                color_chroma += struct.pack('<H', 512) * 96
+                chroma += color_chroma * 4 + struct.pack('<H', 512) * (144 * 12)
+            frame = color_row * 8 + row * 24 + chroma
             hdr_pattern.write_bytes(b'YUV4MPEG2 W288 H32 F25:1 Ip A1:1 C420p10\n' +
                                     (b'FRAME\n' + frame) * 4)
             hdr_executable = directory / 'hdr-smoke'
@@ -243,6 +258,10 @@ def main():
                 if completed.returncode or marker not in completed.stdout:
                     raise RuntimeError(f'Simulator did not confirm {marker}:\n{completed.stdout}')
                 print(next(line for line in completed.stdout.splitlines() if marker in line))
+                contract_marker = 'LIBMPV_IOS_HDR_CONTRACT_OK'
+                if contract_marker not in completed.stdout:
+                    raise RuntimeError('Simulator did not confirm the HDR surface color contract')
+                print(next(line for line in completed.stdout.splitlines() if contract_marker in line))
             if target_executable:
                 completed = subprocess.run(['xcrun', 'simctl', 'spawn', device, str(target_executable),
                     str(pattern), str(hdr_pattern)], text=True, stdout=subprocess.PIPE,

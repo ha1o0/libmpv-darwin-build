@@ -39,6 +39,13 @@ subtitles and OSD stay in the same final frame. The existing 32BGRA target and
 SDR path remain unchanged. A consumer must present the RGBA16F target through
 an EDR-capable native Metal layer; Flutter's ordinary 8-bit texture contract
 does not provide HDR presentation by itself.
+The native HDR target's transfer/primaries are authoritative: generic SDR
+`target-*` options cannot relabel PQ/HLG pixels. Matching HDR source/target
+transfers retain source mastering luminance and bypass mpv tone curves and
+peak detection. SDR surfaces and screenshots keep their existing tone-mapping
+options. The host must select SDR on displays without usable EDR headroom and
+tag only actual HDR pixels as HDR. CI checks absolute PQ samples, conflicting
+SDR options, algorithm invariance and switching back to SDR.
 libplacebo negotiates Vulkan portability and Metal import extensions. The
 offscreen backend reuses at most four imported targets and retires them when
 the target size changes or the renderer is destroyed. It still completes GPU
