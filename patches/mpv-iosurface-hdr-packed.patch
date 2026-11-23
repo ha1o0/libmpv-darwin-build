@@ -1,0 +1,48 @@
+--- a/video/out/gpu_next/context.c
++++ b/video/out/gpu_next/context.c
+@@ -596,6 +596,7 @@
+     pl_vulkan device;
+     pl_fmt bgra_format;
+     pl_fmt hdr_format;
++    pl_fmt hdr_packed_format;
+     int width, height;
+     unsigned next_target;
+     struct iosurface_target targets[IOSURFACE_TARGETS];
+@@ -655,6 +656,7 @@
+     ctx->gpu = p->device->gpu;
+     p->bgra_format = pl_find_named_fmt(ctx->gpu, "bgra8");
+     p->hdr_format = pl_find_named_fmt(ctx->gpu, "rgba16f");
++    p->hdr_packed_format = pl_find_named_fmt(ctx->gpu, "bgr10a2");
+     if (!(ctx->gpu->import_caps.tex & PL_HANDLE_IOSURFACE) ||
+         !p->bgra_format || !(p->bgra_format->caps & PL_FMT_CAP_RENDERABLE))
+         goto fail;
+@@ -684,7 +686,8 @@
+         return MPV_ERROR_INVALID_PARAMETER;
+     OSType format = IOSurfaceGetPixelFormat(surface);
+     if (format != kCVPixelFormatType_32BGRA &&
+-        format != kCVPixelFormatType_64RGBAHalf)
++        format != kCVPixelFormatType_64RGBAHalf &&
++        format != kCVPixelFormatType_ARGB2101010LEPacked)
+         return MPV_ERROR_UNSUPPORTED;
+     *w = IOSurfaceGetWidth(surface);
+     *h = IOSurfaceGetHeight(surface);
+@@ -732,6 +735,9 @@
+     if (surface_format == kCVPixelFormatType_64RGBAHalf &&
+         (!p->hdr_format || !(p->hdr_format->caps & PL_FMT_CAP_RENDERABLE)))
+         return MPV_ERROR_UNSUPPORTED;
++    if (surface_format == kCVPixelFormatType_ARGB2101010LEPacked &&
++        (!p->hdr_packed_format || !(p->hdr_packed_format->caps & PL_FMT_CAP_RENDERABLE)))
++        return MPV_ERROR_UNSUPPORTED;
+     iosurface_set_target_color(ctx, color_space);
+     if (w != p->width || h != p->height) {
+         iosurface_drop_targets(ctx);
+@@ -751,7 +757,8 @@
+     // Release the old import before allocating a replacement.
+     iosurface_drop_target(ctx, index);
+     pl_fmt format = surface_format == kCVPixelFormatType_64RGBAHalf
+-        ? p->hdr_format : p->bgra_format;
++        ? p->hdr_format : surface_format == kCVPixelFormatType_ARGB2101010LEPacked
++        ? p->hdr_packed_format : p->bgra_format;
+     pl_tex texture = pl_tex_create(ctx->gpu, pl_tex_params(
+         .w = w, .h = h, .format = format, .renderable = true, .blit_dst = true,
+         .import_handle = PL_HANDLE_IOSURFACE,

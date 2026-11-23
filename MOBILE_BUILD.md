@@ -46,6 +46,10 @@ peak detection. SDR surfaces and screenshots keep their existing tone-mapping
 options. The host must select SDR on displays without usable EDR headroom and
 tag only actual HDR pixels as HDR. CI checks absolute PQ samples, conflicting
 SDR options, algorithm invariance and switching back to SDR.
+The preferred native HDR target is `kCVPixelFormatType_ARGB2101010LEPacked`
+(`bgr10a2` / `MTLPixelFormatBGR10A2Unorm`): normalized PQ/HLG at four bytes per
+pixel, half the output memory/bandwidth of RGBA16F. The float target remains
+supported. CI compares RGB primaries and gray samples across both formats.
 libplacebo negotiates Vulkan portability and Metal import extensions. The
 offscreen backend reuses at most four imported targets and retires them when
 the target size changes or the renderer is destroyed. It still completes GPU

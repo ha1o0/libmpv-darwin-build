@@ -262,6 +262,10 @@ def main():
                 if contract_marker not in completed.stdout:
                     raise RuntimeError('Simulator did not confirm the HDR surface color contract')
                 print(next(line for line in completed.stdout.splitlines() if contract_marker in line))
+                packed_marker = 'LIBMPV_IOS_HDR_PACKED_OK'
+                if packed_marker not in completed.stdout:
+                    raise RuntimeError('Simulator did not confirm the packed HDR surface pixels')
+                print(next(line for line in completed.stdout.splitlines() if packed_marker in line))
             if target_executable:
                 completed = subprocess.run(['xcrun', 'simctl', 'spawn', device, str(target_executable),
                     str(pattern), str(hdr_pattern)], text=True, stdout=subprocess.PIPE,

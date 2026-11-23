@@ -7,7 +7,7 @@
 #include <math.h>
 #include <stdint.h>
 
-static CVPixelBufferRef make_hdr_pixel_buffer(size_t w, size_t h)
+static CVPixelBufferRef make_hdr_pixel_buffer_format(size_t w, size_t h, OSType format)
 {
     const void *keys[] = { kCVPixelBufferIOSurfacePropertiesKey,
                            kCVPixelBufferMetalCompatibilityKey };
@@ -17,10 +17,15 @@ static CVPixelBufferRef make_hdr_pixel_buffer(size_t w, size_t h)
     CFDictionaryRef attrs = CFDictionaryCreate(NULL, keys, values, 2,
         &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CVPixelBufferRef result = NULL;
-    CVPixelBufferCreate(NULL, w, h, kCVPixelFormatType_64RGBAHalf, attrs, &result);
+    CVPixelBufferCreate(NULL, w, h, format, attrs, &result);
     CFRelease(attrs);
     CFRelease(properties);
     return result;
+}
+
+static CVPixelBufferRef make_hdr_pixel_buffer(size_t w, size_t h)
+{
+    return make_hdr_pixel_buffer_format(w, h, kCVPixelFormatType_64RGBAHalf);
 }
 
 static float half_to_float(uint16_t value)
@@ -124,6 +129,39 @@ static bool verify_passthrough_contract(mpv_handle *mpv, mpv_render_context *ctx
     return true;
 }
 
+static bool verify_packed_hdr(mpv_render_context *ctx, CVPixelBufferRef reference)
+{
+    CVPixelBufferRef packed = make_hdr_pixel_buffer_format(288, 32, kCVPixelFormatType_ARGB2101010LEPacked);
+    if (!packed) return false;
+    bool ok = true;
+    for (int mode = 1; mode <= 2 && ok; mode++) {
+        if (render_hdr(ctx, reference, mode) < 0 || render_hdr(ctx, packed, mode) < 0) {
+            ok = false;
+            break;
+        }
+        CVPixelBufferLockBaseAddress(reference, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferLockBaseAddress(packed, kCVPixelBufferLock_ReadOnly);
+        const uint8_t *a = CVPixelBufferGetBaseAddress(reference);
+        const uint8_t *b = CVPixelBufferGetBaseAddress(packed);
+        for (int row = 0; row < 2; row++) {
+            int y = row == 0 ? 4 : 16;
+            for (int x = 0; x < 9; x++) {
+                const uint16_t *half = (const uint16_t *)(a + y * CVPixelBufferGetBytesPerRow(reference)) + (x * 32 + 16) * 4;
+                uint32_t word = ((const uint32_t *)(b + y * CVPixelBufferGetBytesPerRow(packed)))[x * 32 + 16];
+                for (int c = 0; c < 3; c++) {
+                    float value = ((word >> ((2 - c) * 10)) & 1023) / 1023.0f;
+                    ok &= fabsf(value - half_to_float(half[c])) < 0.003f;
+                }
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(packed, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferUnlockBaseAddress(reference, kCVPixelBufferLock_ReadOnly);
+    }
+    CVPixelBufferRelease(packed);
+    if (ok) puts("LIBMPV_IOS_HDR_PACKED_OK BGR10A2 matches RGBA16F primaries and ramp; four bytes per pixel");
+    return ok;
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) return 1;
     mpv_handle *mpv = mpv_create();
@@ -158,6 +196,7 @@ int main(int argc, char **argv) {
         if(rendered && i>70) break;
     }
     if (!verify_passthrough_contract(mpv, ctx, buffer)) return 7;
+    if (!verify_packed_hdr(ctx, buffer)) return 8;
     for (int color_space = 1; color_space <= 2; color_space++) {
         for (int i = 0; i < 4; i++) {
             mpv_render_context_update(ctx);
