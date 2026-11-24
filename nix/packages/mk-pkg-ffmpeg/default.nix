@@ -48,6 +48,11 @@ let
     patch -p1 <${../../../patches/ffmpeg-mpegts-wrapped-webp.patch}
     ${pkgs.lib.optionalString iosVideo "patch -p1 <${../../../patches/ffmpeg-ios-metal-compatibility.patch}"}
     ${pkgs.lib.optionalString iosVideo "patch -p1 <${../../../patches/ffmpeg-ios-videotoolbox-dolby-vision.patch}"}
+    # mpv's demuxer-lavf-mp4-read-strategy needs this FFmpeg extension. Without
+    # it a camera MOV whose audio lies megabytes from its video makes a stream
+    # seek (an HTTP range request) for every packet. FFmpeg 7 MOV structures
+    # differ, so the legacy builds keep their original packet order.
+    ${pkgs.lib.optionalString iosVideo "patch -p1 <${../../../patches/ffmpeg-mov-bounded-interleave.patch}"}
     # Keep the legacy GLES HDR workaround outside the iOS Metal video build.
     # FFmpeg 9 supplies P010 and already escapes DASH base URLs.
     ${pkgs.lib.optionalString (!iosVideo) ''

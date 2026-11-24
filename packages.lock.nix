@@ -16,9 +16,9 @@ let mobile = builtins.fromJSON (builtins.readFile ./mobile-sources.json); in
     sha256 = "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a";
   };
   dav1d = {
-    version = "1.2.1";
-    url = "https://code.videolan.org/videolan/dav1d/-/archive/1.2.1/dav1d-1.2.1.tar.bz2";
-    sha256 = "a4003623cdc0109dec3aac8435520aa3fb12c4d69454fa227f2658cdb6dab5fa";
+    version = "1.5.4";
+    url = "https://code.videolan.org/videolan/dav1d/-/archive/1.5.4/dav1d-1.5.4.tar.bz2";
+    sha256 = "2abfb0c89212e6e4733a54e0ae509ec00a5b845a6360946f918806e14aedb011";
   };
   inherit (mobile) ffmpeg glslang moltenvk;
   ffmpeg_legacy = {

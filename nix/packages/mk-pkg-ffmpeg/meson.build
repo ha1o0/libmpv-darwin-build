@@ -40,7 +40,8 @@ disable_all_options = [
 
 common_options = [
     '--prefix=@PREFIX@',
-    '--enable-small', # reduce libs size
+    # No --enable-small: it trades the software decoders' speed (VP9, AV1
+    # glue, HEVC/H.264 fallbacks) for a few megabytes.
     '--enable-optimizations',
     '--enable-shared',
     '--enable-network',
