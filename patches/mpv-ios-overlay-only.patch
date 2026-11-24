@@ -1,0 +1,150 @@
+diff --git a/include/mpv/render.h b/include/mpv/render.h
+index 62f61a6..a576a53 100755
+--- a/include/mpv/render.h
++++ b/include/mpv/render.h
+@@ -489,6 +489,22 @@ typedef enum mpv_render_param_type {
+      * Type: int*. Use MPV_RENDER_IOSURFACE_COLOR_SPACE_*.
+      */
+     MPV_RENDER_PARAM_IOSURFACE_COLOR_SPACE = 27,
++    /**
++     * iOS overlay-only rendering for native Dolby Vision presentation.
++     * Valid for MPV_RENDER_API_TYPE_IOSURFACE and mpv_render_context_render().
++     * Type: int*, set to 1. The 32BGRA IOSurface target is cleared to
++     * transparent black and receives only OSD and subtitles, premultiplied
++     * and in sRGB, positioned for the current video rectangle. The video
++     * plane, color adjustments, shaders and tone mapping are skipped. The
++     * frame is consumed with normal presentation timing, so the caller can
++     * fetch the matching decoded frame afterwards with
++     * mpv_render_context_get_info(MPV_RENDER_PARAM_IOS_PIP_FRAME) and present
++     * it itself (for example in an AVSampleBufferDisplayLayer).
++     *
++     * get_info() writes 1 to an int* to indicate support. Old libraries return
++     * NOT_IMPLEMENTED; hosts must probe before relying on this parameter.
++     */
++    MPV_RENDER_PARAM_IOS_OVERLAY_ONLY = 28,
+ } mpv_render_param_type;
+ 
+ /** Values for MPV_RENDER_PARAM_IOSURFACE_COLOR_SPACE. */
+diff --git a/video/out/gpu_next/libmpv_gpu_next.c b/video/out/gpu_next/libmpv_gpu_next.c
+index a2ed470..f1fbfd7 100755
+--- a/video/out/gpu_next/libmpv_gpu_next.c
++++ b/video/out/gpu_next/libmpv_gpu_next.c
+@@ -147,8 +147,13 @@ static int render(struct render_backend *ctx, mpv_render_param *params,
+     if (err < 0) return err;
+     if (!target_tex) return MPV_ERROR_GENERIC;
+ 
+-    // Render the video frame.
+-    pl_video_render(p->video_engine, frame, target_tex, &p->context->target_color);
++    // Render the video frame, or only its OSD/subtitles for a host that
++    // presents the decoded frame itself (iOS Dolby Vision pass-through).
++    bool overlay_only = GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_IOS_OVERLAY_ONLY, int, 0);
++    if (overlay_only)
++        pl_video_render_overlay(p->video_engine, frame, target_tex);
++    else
++        pl_video_render(p->video_engine, frame, target_tex, &p->context->target_color);
+ 
+     if (!p->context->fns->retains_wrapped_targets)
+         ra_next_tex_destroy(p->context->ra, &target_tex);
+diff --git a/video/out/gpu_next/video.c b/video/out/gpu_next/video.c
+index 57b12df..55fbb25 100755
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -92,6 +92,7 @@ struct pl_video {
+     ra_queue queue;        // The frame queue for handling video frames and interpolation.
+     uint64_t last_frame_id;// To avoid pushing duplicate frames into the queue.
+     double last_pts;       // Last presentation timestamp we rendered at, for redraws.
++    struct mp_image *overlay_src; // Last source frame of overlay-only renders.
+ 
+     // Render State
+     struct mp_image_params current_params; // Current video parameters (resolution, colorspace, etc.).
+@@ -653,6 +654,7 @@ void pl_video_uninit(struct pl_video **p_ptr) {
+ 
+     ra_next_queue_destroy(&p->queue);
+     destroy_shader_hooks(&p->shader_hooks, p->num_shader_hooks);
++    TA_FREEP(&p->overlay_src);
+ 
+     // Clean up all allocated OSD GPU resources
+     for (int i = 0; i < MP_ARRAY_SIZE(p->osd_state_storage.entries); i++) {
+@@ -962,6 +964,38 @@ void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_t
+     }
+ }
+ 
++void pl_video_render_overlay(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex)
++{
++    // Subtitle timing and the HDR/SDR tagging of image subtitles depend on
++    // the source frame. Keep it across redraws, which carry no image.
++    if (frame && frame->current && frame->current != p->overlay_src) {
++        talloc_free(p->overlay_src);
++        p->overlay_src = mp_image_new_ref(frame->current);
++        p->last_pts = frame->current->pts;
++    }
++
++    struct pl_frame target_frame = {
++        .num_planes = 1,
++        .planes[0] = { .texture = target_tex, .components = 4, .component_mapping = {0,1,2,3} },
++        .crop = { .x0 = p->current_dst.x0, .y0 = p->current_dst.y0, .x1 = p->current_dst.x1, .y1 = p->current_dst.y1 },
++        .color = pl_color_space_srgb,
++        .repr = pl_color_repr_rgb,
++    };
++    // Core Animation composites this layer over the system-presented video.
++    target_frame.repr.alpha = PL_ALPHA_PREMULTIPLIED;
++
++    update_overlays(p, p->osd_res, 0, PL_OVERLAY_COORDS_DST_FRAME,
++                    &p->osd_state_storage, &target_frame, p->overlay_src);
++
++    // A NULL image clears the whole target and draws only its overlays.
++    struct pl_render_params params = *pl_render_params(
++        .border = PL_CLEAR_COLOR,
++        .background_transparency = 1.0f,
++    );
++    if (!ra_next_render_image(p->ra, NULL, &target_frame, &params))
++        mp_msg(p->log, MSGL_ERR, "Overlay rendering failed.\n");
++}
++
+  /**
+   * @brief Takes a screenshot of the current video frame.
+   * @param ctx The render_backend context.
+@@ -1118,6 +1152,7 @@ void pl_video_reset(struct pl_video *p) {
+     if (!p || !p->ra) return;
+     ra_pl_reset(p->ra);
+     ra_next_queue_reset(p->queue); // Also reset the frame queue.
++    TA_FREEP(&p->overlay_src);
+     p->last_frame_id = 0;
+     p->last_pts = 0;
+ }
+diff --git a/video/out/gpu_next/video.h b/video/out/gpu_next/video.h
+index 537df14..27f12ad 100755
+--- a/video/out/gpu_next/video.h
++++ b/video/out/gpu_next/video.h
+@@ -34,6 +34,12 @@ void pl_video_uninit(struct pl_video **p_ptr);
+ void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex,
+                      const struct pl_color_space *target_color);
+ 
++/**
++ * Clears `target_tex` to transparent black and renders only OSD/subtitles
++ * (premultiplied sRGB) for `frame`. The video plane is not touched.
++ */
++void pl_video_render_overlay(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex);
++
+ /**
+  * Synchronously renders `frame` into an sRGB temporary and returns a newly
+  * allocated mp_image (RGBA) with the result. Caller must free the returned
+diff --git a/video/out/vo_libmpv.c b/video/out/vo_libmpv.c
+index ade47aa..387fe48 100755
+--- a/video/out/vo_libmpv.c
++++ b/video/out/vo_libmpv.c
+@@ -751,6 +751,14 @@ int mpv_render_context_get_info(mpv_render_context *ctx,
+         res = param.data ? retain_pip_frame(ctx->cur_frame, param.data)
+                          : MPV_ERROR_INVALID_PARAMETER;
+         break;
++    case MPV_RENDER_PARAM_IOS_OVERLAY_ONLY:
++        if (param.data) {
++            *(int *)param.data = 1;
++            res = 0;
++        } else {
++            res = MPV_ERROR_INVALID_PARAMETER;
++        }
++        break;
+ #endif
+     case MPV_RENDER_PARAM_NEXT_FRAME_INFO: {
+         mpv_render_frame_info *info = param.data;

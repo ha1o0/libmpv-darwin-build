@@ -88,6 +88,29 @@ Vulkan, and the 4K HEVC Main 10 seek fixture. Physical-device VideoToolbox,
 AVKit timing, HDR color and repeated foreground/background transitions still
 need acceptance; a simulator result does not establish device smoothness.
 
+## Native Dolby Vision presentation
+
+FFmpeg's VideoToolbox hwaccel normally creates every HEVC session as `hvc1`
+with only `hvcC`, so VideoToolbox never learns that a stream is Dolby Vision and
+drops the per-frame RPU. `ffmpeg-ios-videotoolbox-dolby-vision.patch` creates
+single-layer Dolby Vision streams (profile 5 and 8, from the container's
+`AV_PKT_DATA_DOVI_CONF`) as `dvh1` with a `dvcC`/`dvvC` record. VideoToolbox
+then attaches the RPU to each output buffer (`DolbyVisionRPUData`); if the
+device rejects the Dolby Vision session, the patch retries as plain HEVC.
+Decoded pixels are unchanged, and FFmpeg still exports the RPU as side data, so
+libplacebo's reshaping and HDR10 output path keeps working unchanged.
+
+`mpv-ios-overlay-only.patch` adds `MPV_RENDER_PARAM_IOS_OVERLAY_ONLY` (28). With
+a 32BGRA IOSurface target it consumes the next frame with normal timing, clears
+the target to transparent and draws only OSD and subtitles (premultiplied sRGB)
+for the current video rectangle. The host then fetches the matching decoded
+frame with `get_info(MPV_RENDER_PARAM_IOS_PIP_FRAME)` and enqueues it into an
+`AVSampleBufferDisplayLayer`, where the system compositor applies the Dolby
+Vision display mapping as AVPlayer does, and shows the overlay above it. This
+path bypasses mpv's picture adjustments, shaders, zoom/rotation and tone
+mapping, so hosts should offer it as an opt-in mode. Probe support with
+`get_info()`; older libraries return `NOT_IMPLEMENTED`.
+
 ## iOS memory pressure
 
 The iOS video recipe defaults to one VideoToolbox decode worker and two extra
