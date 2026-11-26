@@ -95,10 +95,16 @@ int main(int argc,char **argv) {
     }
     for(int phase=0;phase<2;phase++) {
         // Apple HLS fragments preserve a ten-second presentation-time offset.
-        if(!seek_frame(mpv,ctx,reference,&dirty,phase?"17":"13")) {
+        if(!seek_frame(mpv,ctx,reference,&dirty,phase?"17":"15")) {
             char *position=mpv_get_property_string(mpv,"time-pos");
             fprintf(stderr,"P5 fixture seek failed, position=%s\n",position?position:"unavailable");
             mpv_free(position);return 7;
+        }
+        // time-pos is acknowledged before the new paused frame reaches the
+        // renderer. Drain its redraws before comparing the two paths.
+        for(int settle=0;settle<10;settle++) {
+            mpv_wait_event(mpv,.025); mpv_render_context_update(ctx);
+            if(gpu(ctx,reference)<0)return 16;
         }
         int status=cpu(ctx,baseline,4);
         if(status<0){fprintf(stderr,"DV CPU compose error %d\n",status);return 8;}
