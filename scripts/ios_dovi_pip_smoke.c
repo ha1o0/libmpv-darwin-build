@@ -61,7 +61,8 @@ static int differences(CVPixelBufferRef a,CVPixelBufferRef b) {
 static bool seek_frame(mpv_handle *mpv,mpv_render_context *ctx,CVPixelBufferRef p,atomic_bool *dirty,const char *time) {
     if(mpv_command(mpv,(const char*[]){"seek",time,"absolute+exact",NULL})<0)return false;
     bool rendered=false;
-    for(int n=0;n<200;n++) {
+    uint64_t deadline=clock_gettime_nsec_np(CLOCK_UPTIME_RAW)+20000000000ULL;
+    for(int n=0;clock_gettime_nsec_np(CLOCK_UPTIME_RAW)<deadline;n++) {
         mpv_wait_event(mpv,.02);
         if(atomic_exchange(dirty,false)){
             if(mpv_render_context_update(ctx)&MPV_RENDER_UPDATE_FRAME) rendered=gpu(ctx,p)>=0;
@@ -86,13 +87,19 @@ int main(int argc,char **argv) {
     if(mpv_render_context_get_info(ctx,(mpv_render_param){MPV_RENDER_PARAM_IOS_PIP_SW,&capability})<0||capability<4)return 5;
     if(mpv_command(mpv,(const char*[]){"loadfile",argv[1],NULL})<0)return 6;
     bool loaded=false;
-    for(int n=0;n<250;n++){
+    uint64_t load_deadline=clock_gettime_nsec_np(CLOCK_UPTIME_RAW)+30000000000ULL;
+    for(int n=0;clock_gettime_nsec_np(CLOCK_UPTIME_RAW)<load_deadline;n++){
         mpv_event *e=mpv_wait_event(mpv,.02);loaded|=e->event_id==MPV_EVENT_FILE_LOADED;
         if(atomic_exchange(&dirty,false) && (mpv_render_context_update(ctx)&MPV_RENDER_UPDATE_FRAME)) gpu(ctx,reference);
-        if(loaded&&n>40)break;
+        if(loaded) {char *v=mpv_get_property_string(mpv,"video-params");bool ready=v!=NULL;mpv_free(v);if(ready)break;}
     }
     for(int phase=0;phase<2;phase++) {
-        if(!seek_frame(mpv,ctx,reference,&dirty,phase?"7":"3"))return 7;
+        // Apple HLS fragments preserve a ten-second presentation-time offset.
+        if(!seek_frame(mpv,ctx,reference,&dirty,phase?"17":"13")) {
+            char *position=mpv_get_property_string(mpv,"time-pos");
+            fprintf(stderr,"P5 fixture seek failed, position=%s\n",position?position:"unavailable");
+            mpv_free(position);return 7;
+        }
         int status=cpu(ctx,baseline,4);
         if(status<0){fprintf(stderr,"DV CPU compose error %d\n",status);return 8;}
         if(!colors(reference,baseline))return 9;
