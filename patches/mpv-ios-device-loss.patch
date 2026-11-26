@@ -1,0 +1,65 @@
+--- a/video/out/gpu_next/libmpv_gpu_next.c
++++ b/video/out/gpu_next/libmpv_gpu_next.c
+@@ -140,6 +140,7 @@
+ {
+     struct priv *p = ctx->priv;
+     if (!p->video_engine) return MPV_ERROR_UNINITIALIZED;
++    if (pl_gpu_is_failed(p->context->gpu)) return MPV_ERROR_VO_INIT_FAILED;
+ 
+     // Wrap the framebuffer object (FBO) for rendering.
+     pl_tex target_tex = NULL;
+@@ -160,6 +161,7 @@
+     if (p->context->fns->done_frame)
+         p->context->fns->done_frame(p->context);
+ 
++    if (pl_gpu_is_failed(p->context->gpu)) return MPV_ERROR_VO_INIT_FAILED;
+     return rendered ? 0 : MPV_ERROR_GENERIC;
+ }
+ 
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -41,6 +41,7 @@
+ #include "config.h"
+ #if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
+ #include "video/out/placebo/ra_pl.h"
++#include <sys/sysctl.h>
+ #endif
+ #if HAVE_D3D11
+ #include "osdep/windows_utils.h"
+@@ -98,6 +99,7 @@
+     struct mp_sws_context *sw_upload_scaler;
+     struct mp_image_pool *sw_upload_pool;
+     bool sw_upload_limited;
++    bool low_memory_ios;
+ 
+     // Render State
+     struct mp_image_params current_params; // Current video parameters (resolution, colorspace, etc.).
+@@ -484,6 +486,13 @@
+             return false;
+         }
+     } else {
++        // Full-size 8K software uploads can lose the Metal device before an
++        // allocation error is returned. Bound them on constrained iOS devices.
++        if (!p->sw_upload_limited && p->low_memory_ios &&
++            (int64_t)mpi->w * mpi->h > 4096 * 2304) {
++            p->sw_upload_limited = true;
++            mp_msg(p->log, MSGL_WARN, "Low-memory iOS: bounding oversized software video upload.\n");
++        }
+         struct mp_image *upload = p->sw_upload_limited ? fit_software_upload(p, mpi) : NULL;
+         if (!ra_upload_mp_image(p->ra, frame, upload ? upload : mpi)) {
+             if (!upload) upload = fit_software_upload(p, mpi);
+@@ -670,6 +679,14 @@
+     p->ra_ctx = ra_ctx;
+     p->hwdec_devs = hwdec_devs;
+     p->queue = ra_next_queue_create(ra);
++#if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
++    uint64_t physical_memory = 0;
++    size_t memory_size = sizeof(physical_memory);
++    if (p->ra_ctx && ra_pl_get(p->ra_ctx->ra) == p->ra->gpu &&
++        sysctlbyname("hw.memsize", &physical_memory, &memory_size, NULL, 0) == 0)
++        p->low_memory_ios = physical_memory > 0 && physical_memory <= 3ULL * 1024 * 1024 * 1024;
++#endif
++
+ 
+     // Pre-find the texture formats we'll need for OSD bitmaps for efficiency.
+     p->osd_fmt[SUBBITMAP_LIBASS] = ra_next_find_fmt(p->ra, PL_FMT_UNORM, 1, 8, 8, 0);
