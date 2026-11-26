@@ -1,0 +1,137 @@
+diff --git a/player/command.c b/player/command.c
+index 4fdabb0..cd148fe 100644
+--- a/player/command.c
++++ b/player/command.c
+@@ -31,7 +31,11 @@
+ #if HAVE_SUBRANDR
+ #include <subrandr/subrandr.h>
+ #endif
++#include <libavcodec/codec_par.h>
++#include <libavcodec/packet.h>
+ #include <libavutil/avstring.h>
++#include <libavutil/dovi_meta.h>
++#include <libavutil/frame.h>
+ #include <libavutil/common.h>
+ #include <libavutil/timecode.h>
+ 
+@@ -69,6 +73,7 @@
+ #include "video/out/vo.h"
+ #include "video/csputils.h"
+ #include "video/hwdec.h"
++#include "video/dovi_source_spec.h"
+ #include "audio/aframe.h"
+ #include "audio/format.h"
+ #include "audio/out/ao.h"
+@@ -2738,6 +2743,59 @@ static int mp_property_vd_imgparams(void *ctx, struct m_property *prop,
+     return M_PROPERTY_UNAVAILABLE;
+ }
+ 
++// Read the selected stream and its already-decoded metadata. This property
++// never opens another input, decodes a frame or changes output configuration.
++static int mp_property_video_dolby_vision(void *ctx, struct m_property *prop,
++                                         int action, void *arg)
++{
++    MPContext *mpctx = ctx;
++    int valid = m_property_read_sub_validate(ctx, prop, action, arg);
++    if (valid != M_PROPERTY_VALID)
++        return valid;
++    struct track *track = mpctx->current_track[0][STREAM_VIDEO];
++    if (!track || !track->stream || !track->stream->codec)
++        return M_PROPERTY_UNAVAILABLE;
++    struct mp_codec_params *codec = track->stream->codec;
++    const AVCodecParameters *lav = codec->lav_codecpar;
++    const AVPacketSideData *side = lav
++        ? av_packet_side_data_get(lav->coded_side_data, lav->nb_coded_side_data,
++                                  AV_PKT_DATA_DOVI_CONF) : NULL;
++    const AVDOVIDecoderConfigurationRecord *config =
++        side && side->size >= sizeof(*config) ? (const void *)side->data : NULL;
++    if (!config && !codec->dovi)
++        return M_PROPERTY_UNAVAILABLE;
++    const int profile = config ? config->dv_profile : codec->dv_profile;
++    const char *enhancement = NULL;
++    if (profile == 7 && config && config->el_present_flag &&
++        mpctx->video_out && mpctx->vo_chain && mpctx->vo_chain->track == track) {
++        struct mp_image *frame = vo_get_current_frame(mpctx->video_out);
++        if (frame) {
++            for (int n = 0; n < frame->num_ff_side_data; n++) {
++                struct mp_ff_side_data *data = &frame->ff_side_data[n];
++                if (data->type == AV_FRAME_DATA_DOVI_METADATA && data->buf) {
++                    enhancement = mp_dovi_enhancement_layer(data->buf->data,
++                                                           data->buf->size);
++                    break;
++                }
++            }
++            talloc_free(frame);
++        }
++    }
++    struct m_sub_property props[] = {
++        {"track-id", SUB_PROP_INT(track->user_tid)},
++        {"profile", SUB_PROP_INT(profile)},
++        {"level", SUB_PROP_INT(config ? config->dv_level : codec->dv_level)},
++        {"compatibility-id", SUB_PROP_INT(config ? config->dv_bl_signal_compatibility_id : 0),
++                             .unavailable = !config},
++        {"rpu-present", SUB_PROP_BOOL(config && config->rpu_present_flag), .unavailable = !config},
++        {"base-layer-present", SUB_PROP_BOOL(config && config->bl_present_flag), .unavailable = !config},
++        {"enhancement-layer-present", SUB_PROP_BOOL(config && config->el_present_flag), .unavailable = !config},
++        {"enhancement-layer", SUB_PROP_STR(enhancement), .unavailable = !enhancement},
++        {0}
++    };
++    return m_property_read_sub(props, action, arg);
++}
++
+ static int mp_property_video_frame_info(void *ctx, struct m_property *prop,
+                                         int action, void *arg)
+ {
+@@ -4748,6 +4806,7 @@ static const struct m_property mp_properties_base[] = {
+     {"video-out-params", mp_property_vo_imgparams},
+     {"video-dec-params", mp_property_dec_imgparams},
+     {"video-params", mp_property_vd_imgparams},
++    {"video-dolby-vision", mp_property_video_dolby_vision},
+     {"video-frame-info", mp_property_video_frame_info},
+     M_PROPERTY_ALIAS("video-format", "current-tracks/video/codec"),
+     M_PROPERTY_ALIAS("video-codec", "current-tracks/video/codec-desc"),
+diff --git a/video/dovi_source_spec.h b/video/dovi_source_spec.h
+new file mode 100644
+index 0000000..72bf0dd
+--- /dev/null
++++ b/video/dovi_source_spec.h
+@@ -0,0 +1,39 @@
++#pragma once
++
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++#include <libavutil/dovi_meta.h>
++
++// Inspect parsed FFmpeg RPU side data without changing it. An EL presence
++// flag alone cannot distinguish MEL from FEL. MEL has a zero residual NLQ
++// for all components; unsupported or incomplete metadata stays unknown.
++static inline const char *mp_dovi_enhancement_layer(const uint8_t *bytes, size_t size)
++{
++    if (!bytes || size < sizeof(AVDOVIMetadata))
++        return NULL;
++    AVDOVIMetadata metadata;
++    memcpy(&metadata, bytes, sizeof(metadata));
++    if (metadata.header_offset < sizeof(metadata) ||
++        metadata.mapping_offset < sizeof(metadata) ||
++        metadata.header_offset > size || metadata.mapping_offset > size ||
++        size - metadata.header_offset < sizeof(AVDOVIRpuDataHeader) ||
++        size - metadata.mapping_offset < sizeof(AVDOVIDataMapping))
++        return NULL;
++    AVDOVIRpuDataHeader header;
++    AVDOVIDataMapping mapping;
++    memcpy(&header, bytes + metadata.header_offset, sizeof(header));
++    memcpy(&mapping, bytes + metadata.mapping_offset, sizeof(mapping));
++    if (header.disable_residual_flag || header.coef_log2_denom > 32 ||
++        mapping.nlq_method_idc != AV_DOVI_NLQ_LINEAR_DZ)
++        return NULL;
++    const uint64_t one = UINT64_C(1) << header.coef_log2_denom;
++    for (int c = 0; c < 3; c++) {
++        const AVDOVINLQParams *nlq = &mapping.nlq[c];
++        if (nlq->nlq_offset != 0 || nlq->vdr_in_max != one ||
++            nlq->linear_deadzone_slope != 0 || nlq->linear_deadzone_threshold != 0)
++            return "FEL";
++    }
++    return "MEL";
++}

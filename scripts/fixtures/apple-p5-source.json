@@ -1,0 +1,20 @@
+{
+  "base": "https://devstreaming-cdn.apple.com/videos/streaming/examples/adv_dv_atmos/Job2dae5735-d6ca-48ca-91be-0ec0bead535c-107702578-hls_bundle_hdrhls760_dolbyvision/",
+  "parts": [
+    {
+      "name": "fileSequence0.mp4",
+      "sha256": "ccf7cedc996c8bf74893c1cc02f4af945bb289cafe65a6a6da2c1df06ac59b5d",
+      "size": 1336
+    },
+    {
+      "name": "fileSequence1.m4s",
+      "sha256": "2b50b4ef136e1cff222b545b89173f276b4874fbd289280f9cd7614f74c74ea3",
+      "size": 492870
+    },
+    {
+      "name": "fileSequence2.m4s",
+      "sha256": "65dc64ab16a3a057a47a8c18b9345b417403accff3f9d8ea2a261fb6bf7db322",
+      "size": 1678734
+    }
+  ]
+}

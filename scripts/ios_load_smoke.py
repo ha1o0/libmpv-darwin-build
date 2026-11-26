@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Load the actual bundled simulator frameworks and initialize libmpv, no stubs."""
 import argparse
+import hashlib
+from urllib.request import urlopen
 import json
 import os
 from pathlib import Path
@@ -155,6 +157,26 @@ def main():
                 '-Wl,-rpath,@executable_path/Frameworks', str(source.with_name('ios_pip_smoke.c')),
                 *extra, '-o', str(pip_executable)], check=True)
             subprocess.run(['codesign', '--force', '--sign', '-', str(pip_executable)], check=True)
+        dovi_executable = None
+        if args.iosurface:
+            # Apple provides an unencrypted real P5 sample. Pin every fetched
+            # fragment; do not publish the media as part of the source repo.
+            fixture = json.loads((source.with_name('fixtures') / 'apple-p5-source.json').read_text())
+            parts = []
+            for item in fixture['parts']:
+                with urlopen(fixture['base'] + item['name'], timeout=60) as response:
+                    data = response.read(item['size'] + 1)
+                if len(data) != item['size'] or hashlib.sha256(data).hexdigest() != item['sha256']:
+                    raise ValueError('Apple P5 fixture changed: ' + item['name'])
+                parts.append(data)
+            dovi_sample = directory / 'apple-real-p5.mp4'
+            dovi_sample.write_bytes(b''.join(parts))
+            dovi_executable = directory / 'dovi-pip-smoke'
+            subprocess.run(['xcrun', '--sdk', 'iphonesimulator', 'clang', '-target', f'{arch}-apple-ios15.0-simulator',
+                '-isysroot', run(['xcrun', '--sdk', 'iphonesimulator', '--show-sdk-path']),
+                '-Wl,-rpath,@executable_path/Frameworks', str(source.with_name('ios_dovi_pip_smoke.c')),
+                *extra, '-o', str(dovi_executable)], check=True)
+            subprocess.run(['codesign', '--force', '--sign', '-', str(dovi_executable)], check=True)
         shader_executable = None
         if args.iosurface:
             shader_pattern = directory / 'shader-pattern.y4m'
@@ -241,6 +263,15 @@ def main():
                 if completed.returncode or marker not in completed.stdout:
                     raise RuntimeError(f'Simulator did not confirm {marker}:\n{completed.stdout}')
                 print(next(line for line in completed.stdout.splitlines() if marker in line))
+            if dovi_executable:
+                completed = subprocess.run(['xcrun', 'simctl', 'spawn', device, str(dovi_executable),
+                    str(dovi_sample), str(subtitle)], text=True, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, timeout=180)
+                marker = 'LIBMPV_IOS_DOVI_PIP_OK'
+                if completed.returncode or marker not in completed.stdout:
+                    raise RuntimeError(f'Simulator did not confirm {marker} (exit {completed.returncode}):\n{completed.stdout}')
+                for line in completed.stdout.splitlines():
+                    if marker in line or 'DV_PIP_COLOR' in line: print(line)
             if shader_executable:
                 fixtures = source.with_name('fixtures') / 'anime4k'
                 completed = subprocess.run(['xcrun', 'simctl', 'spawn', device, str(shader_executable),

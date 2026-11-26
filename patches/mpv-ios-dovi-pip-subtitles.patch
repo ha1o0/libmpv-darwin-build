@@ -1,0 +1,325 @@
+diff --git a/video/out/ios_dovi_pip.h b/video/out/ios_dovi_pip.h
+new file mode 100644
+index 0000000..0694da7
+--- /dev/null
++++ b/video/out/ios_dovi_pip.h
+@@ -0,0 +1,118 @@
++// iOS-only CPU equivalent of libplacebo 7.360.1's Dolby color decoding.
++// Reshaping and matrices follow src/shaders/colorspace.c. No display mapping
++// or fake RPU is applied to the resulting BT.2020/PQ pixels.
++#pragma once
++#include <math.h>
++#include <stdint.h>
++#include <stdbool.h>
++#include <libplacebo/colorspace.h>
++
++static inline float dv_clamp(float v, float lo, float hi)
++{
++    return fminf(hi, fmaxf(lo, v));
++}
++
++static inline float dv_pq_decode(float v)
++{
++    float p = powf(dv_clamp(v, 0, 1), 32.0f / 2523.0f);
++    return powf(fmaxf(p - 3424.0f / 4096.0f, 0) /
++                (2413.0f / 128.0f - 2392.0f / 128.0f * p), 16384.0f / 2610.0f);
++}
++
++static inline float dv_pq_encode(float v)
++{
++    float p = powf(dv_clamp(v, 0, 1), 2610.0f / 16384.0f);
++    return powf((3424.0f / 4096.0f + 2413.0f / 128.0f * p) /
++                (1 + 2392.0f / 128.0f * p), 2523.0f / 32.0f);
++}
++
++struct dv_pip_transform {
++    const struct pl_dovi_metadata *metadata;
++    pl_transform3x3 nonlinear;
++    pl_matrix3x3 linear;
++};
++
++static inline bool dv_pip_prepare(struct dv_pip_transform *out,
++                                  struct pl_color_repr repr)
++{
++    const struct pl_dovi_metadata *d = repr.dovi;
++    if (repr.sys != PL_COLOR_SYSTEM_DOLBYVISION || !d)
++        return false;
++    for (int c = 0; c < 3; c++) {
++        const struct pl_reshape_data *curve = &d->comp[c];
++        if (curve->num_pivots == 1 || curve->num_pivots > 9)
++            return false;
++        for (int i = 0; i < curve->num_pivots; i++) {
++            if (!isfinite(curve->pivots[i]) || curve->pivots[i] < 0 ||
++                curve->pivots[i] > 1 || (i && curve->pivots[i] <= curve->pivots[i - 1]))
++                return false;
++        }
++        for (int i = 0; i + 1 < curve->num_pivots; i++) {
++            if (curve->method[i] > 1 || (curve->method[i] == 1 &&
++                (curve->mmr_order[i] < 1 || curve->mmr_order[i] > 3)))
++                return false;
++        }
++    }
++    // Samples supplied below are already normalized to their coded depth.
++    // Retain storage depth for exactly the same RPU offset normalization as
++    // the GPU path after pl_color_repr_normalize.
++    pl_color_repr_normalize(&repr);
++    out->metadata = d;
++    out->nonlinear = pl_color_repr_decode(&repr, NULL);
++    out->linear = (pl_matrix3x3){{
++        {3.06441879f, -2.16597676f, 0.10155818f},
++        {-0.65612108f, 1.78554118f, -0.12943749f},
++        {0.01736321f, -0.04725154f, 1.03004253f},
++    }};
++    pl_matrix3x3_mul(&out->linear, &d->linear);
++    return true;
++}
++
++static inline void dv_pip_color(const struct dv_pip_transform *tr,
++                                const float input[3], float rgb[3])
++{
++    float sig[3], reshaped[3];
++    for (int c = 0; c < 3; c++) sig[c] = dv_clamp(input[c], 0, 1);
++    for (int c = 0; c < 3; c++) {
++        const struct pl_reshape_data *curve = &tr->metadata->comp[c];
++        float s = sig[c];
++        if (!curve->num_pivots) { reshaped[c] = s; continue; }
++        int i = 0;
++        while (i + 2 < curve->num_pivots && s >= curve->pivots[i + 1]) i++;
++        if (curve->method[i] == 0) {
++            const float *p = curve->poly_coeffs[i];
++            s = (p[2] * s + p[1]) * s + p[0];
++        } else {
++            float terms[7] = {sig[0], sig[1], sig[2], sig[0] * sig[1],
++                sig[0] * sig[2], sig[1] * sig[2], sig[0] * sig[1] * sig[2]};
++            float power[7];
++            for (int k = 0; k < 7; k++) power[k] = terms[k];
++            s = curve->mmr_constant[i];
++            for (int order = 0; order < curve->mmr_order[i]; order++) {
++                for (int k = 0; k < 7; k++) {
++                    s += curve->mmr_coeffs[i][order][k] * power[k];
++                    power[k] *= terms[k];
++                }
++            }
++        }
++        reshaped[c] = dv_clamp(s, curve->pivots[0], curve->pivots[curve->num_pivots - 1]);
++    }
++    float lms[3];
++    for (int c = 0; c < 3; c++) {
++        float v = tr->nonlinear.c[c];
++        for (int j = 0; j < 3; j++) v += tr->nonlinear.mat.m[c][j] * reshaped[j];
++        lms[c] = dv_pq_decode(v);
++    }
++    for (int c = 0; c < 3; c++) {
++        float v = 0;
++        for (int j = 0; j < 3; j++) v += tr->linear.m[c][j] * lms[j];
++        rgb[c] = dv_pq_encode(v);
++    }
++}
++
++static inline uint32_t dv_pip_pack(const float rgb[3])
++{
++    return (uint32_t)lrintf(dv_clamp(rgb[2], 0, 1) * 1023) |
++        ((uint32_t)lrintf(dv_clamp(rgb[1], 0, 1) * 1023) << 10) |
++        ((uint32_t)lrintf(dv_clamp(rgb[0], 0, 1) * 1023) << 20) | 0xc0000000u;
++}
+diff --git a/video/out/vo_libmpv.c b/video/out/vo_libmpv.c
+index 0f71202..c4b3d92 100644
+--- a/video/out/vo_libmpv.c
++++ b/video/out/vo_libmpv.c
+@@ -28,6 +28,9 @@
+ 
+ #if HAVE_IOS_GL && HAVE_VULKAN
+ #include <CoreVideo/CoreVideo.h>
++#include <libavutil/pixdesc.h>
++#include "video/fmt-conversion.h"
++#include "ios_dovi_pip.h"
+ #include "sub/draw_bmp.h"
+ #include "video/mp_image_pool.h"
+ #endif
+@@ -504,6 +507,120 @@ static void draw_pip_hdr_osd(struct mpv_render_context *ctx, struct osd_state *o
+     talloc_free(list);
+ }
+ 
++// Sample normalized source components without copying a source-sized frame.
++// Only the bounded PiP output is processed; decoded VideoToolbox buffers stay
++// read-only and all GPU state is untouched while the app is inactive.
++static float pip_component(const struct mp_image *image, const AVPixFmtDescriptor *desc,
++                            int component, float x, float y)
++{
++    AVComponentDescriptor c = desc->comp[component];
++    int xs = component ? desc->log2_chroma_w : 0;
++    int ys = component ? desc->log2_chroma_h : 0;
++    int w = (image->w + (1 << xs) - 1) >> xs;
++    int h = (image->h + (1 << ys) - 1) >> ys;
++    float ox = 0, oy = 0;
++    if (component) pl_chroma_location_offset(image->params.chroma_location, &ox, &oy);
++    x = dv_clamp((x - ox + .5f) / (1 << xs) - .5f, 0, w - 1);
++    y = dv_clamp((y - oy + .5f) / (1 << ys) - .5f, 0, h - 1);
++    int x0 = floorf(x), y0 = floorf(y);
++    int x1 = MPMIN(x0 + 1, w - 1), y1 = MPMIN(y0 + 1, h - 1);
++    float result = 0;
++    for (int dy = 0; dy < 2; dy++) {
++        for (int dx = 0; dx < 2; dx++) {
++            const uint8_t *p = image->planes[c.plane] + (dy ? y1 : y0) * image->stride[c.plane]
++                + (dx ? x1 : x0) * c.step + c.offset;
++            unsigned v = p[0];
++            if (c.depth + c.shift > 8) v |= (unsigned)p[1] << 8;
++            v = (v >> c.shift) & ((1u << c.depth) - 1);
++            result += v * (dx ? x - x0 : 1 - (x - x0)) * (dy ? y - y0 : 1 - (y - y0));
++        }
++    }
++    return result / ((1u << c.depth) - 1);
++}
++
++static void draw_pip_dovi_osd(struct mpv_render_context *ctx, struct osd_state *osd,
++                              double pts, void *pixels, size_t stride, int w, int h)
++{
++    if (!osd) return;
++    struct sub_bitmap_list *list = osd_render(osd, ctx->pip_osd, pts, 0, mp_draw_sub_formats);
++    if (!list->num_items || list->w != w || list->h != h) { talloc_free(list); return; }
++    if (!ctx->pip_osd_cache) ctx->pip_osd_cache = mp_draw_sub_alloc(ctx, ctx->global);
++    struct mp_rect active[8], modified[8];
++    int na = 0, nm = 0;
++    struct mp_image *overlay = mp_draw_sub_overlay(ctx->pip_osd_cache, list,
++        active, MP_ARRAY_SIZE(active), &na, modified, MP_ARRAY_SIZE(modified), &nm);
++    if (overlay && overlay->w >= w && overlay->h >= h) {
++        // sRGB subtitle pixels -> linear BT.2020 at 203 nit reference white.
++        // Blend in linear light, then re-encode PQ. Preserve ten-bit gradients.
++        for (int n = 0; n < na; n++) {
++            struct mp_rect rc = active[n];
++            for (int y = MPMAX(rc.y0, 0); y < MPMIN(rc.y1, h); y++) {
++                for (int x = MPMAX(rc.x0, 0); x < MPMIN(rc.x1, w); x++) {
++                    const uint8_t *src = overlay->planes[0] + y * overlay->stride[0] + 4 * x;
++                    if (!src[3]) continue;
++                    uint32_t *dst = (uint32_t *)((uint8_t *)pixels + y * stride) + x;
++                    float a = src[3] / 255.0f, linear[3], rgb[3];
++                    for (int c = 0; c < 3; c++) {
++                        float v = dv_clamp(src[2 - c] / (float)src[3], 0, 1);
++                        linear[c] = v <= .04045f ? v / 12.92f : powf((v + .055f) / 1.055f, 2.4f);
++                    }
++                    const float bt2020[3][3] = {
++                        {.627404f, .329283f, .043313f},
++                        {.069097f, .919540f, .011362f},
++                        {.016391f, .088013f, .895595f},
++                    };
++                    for (int c = 0; c < 3; c++) {
++                        float sub = 0;
++                        for (int j = 0; j < 3; j++) sub += bt2020[c][j] * linear[j];
++                        float video = dv_pq_decode(((*dst >> ((2 - c) * 10)) & 1023) / 1023.0f);
++                        rgb[c] = dv_pq_encode(sub * (.0203f * a) + video * (1 - a));
++                    }
++                    *dst = dv_pip_pack(rgb);
++                }
++            }
++        }
++    }
++    talloc_free(list);
++}
++
++static int render_pip_dovi(struct mpv_render_context *ctx, const struct mp_image *image,
++                           void *pixels, size_t stride, int w, int h, struct osd_state *osd)
++{
++    if (!image->params.repr.dovi || image->params.repr.sys != PL_COLOR_SYSTEM_DOLBYVISION ||
++        image->params.rotate || image->params.vflip)
++        return MPV_ERROR_UNSUPPORTED;
++    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(imgfmt2pixfmt(image->imgfmt));
++    if (!desc || desc->nb_components != 3 || desc->flags &
++        (AV_PIX_FMT_FLAG_BE | AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_FLOAT | AV_PIX_FMT_FLAG_HWACCEL))
++        return MPV_ERROR_UNSUPPORTED;
++    for (int c = 0; c < 3; c++) {
++        if (desc->comp[c].depth < 8 || desc->comp[c].depth > 16 ||
++            desc->comp[c].depth + desc->comp[c].shift > 16 || !image->planes[desc->comp[c].plane])
++            return MPV_ERROR_UNSUPPORTED;
++    }
++    struct pl_color_repr repr = image->params.repr;
++    repr.bits = (struct pl_bit_encoding) {
++        .sample_depth = desc->comp[0].depth + desc->comp[0].shift > 8 ? 16 : 8,
++        .color_depth = desc->comp[0].depth, .bit_shift = desc->comp[0].shift,
++    };
++    struct dv_pip_transform transform;
++    if (!dv_pip_prepare(&transform, repr)) return MPV_ERROR_UNSUPPORTED;
++    for (int y = 0; y < h; y++) {
++        uint32_t *out = (uint32_t *)((uint8_t *)pixels + y * stride);
++        float sy = (y + .5f) * image->h / h - .5f;
++        for (int x = 0; x < w; x++) {
++            float sx = (x + .5f) * image->w / w - .5f;
++            float input[3], rgb[3];
++            for (int c = 0; c < 3; c++) input[c] = pip_component(image, desc, c, sx, sy);
++            dv_pip_color(&transform, input, rgb);
++            out[x] = dv_pip_pack(rgb);
++        }
++    }
++    ctx->pip_osd = (struct mp_osd_res){.w = w, .h = h, .display_par = 1};
++    draw_pip_dovi_osd(ctx, osd, image->pts, pixels, stride, w, h);
++    return 0;
++}
++
+ static int render_pip_sw(struct mpv_render_context *ctx, mpv_render_param *params,
+                           struct vo_frame *frame, struct osd_state *osd)
+ {
+@@ -511,11 +628,15 @@ static int render_pip_sw(struct mpv_render_context *ctx, mpv_render_param *param
+     char *format = get_mpv_render_param(params, MPV_RENDER_PARAM_SW_FORMAT, NULL);
+     size_t *stride = get_mpv_render_param(params, MPV_RENDER_PARAM_SW_STRIDE, NULL);
+     void *pixels = get_mpv_render_param(params, MPV_RENDER_PARAM_SW_POINTER, NULL);
++    int pip_mode = GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_IOS_PIP_SW, int, 0);
++    bool dovi = pip_mode == 3 || pip_mode == 4;
++    if (pip_mode < 1 || pip_mode > 4) return MPV_ERROR_INVALID_PARAMETER;
+     if (!size && !format && !stride && !pixels)
+         return 0;
+     if (!size || !format || !stride || !pixels || size[0] < 1 || size[1] < 1 ||
+         size[0] > 640 || size[1] > 640 || *stride < size[0] * 4 ||
+-        *stride > INT_MAX || (strcmp(format, "bgr0") && strcmp(format, "bgra")))
++        *stride > INT_MAX || (*stride & 3) || (dovi ? strcmp(format, "x2rgb10le")
++            : (strcmp(format, "bgr0") && strcmp(format, "bgra"))))
+         return MPV_ERROR_INVALID_PARAMETER;
+     if (!frame->current)
+         return MPV_ERROR_UNINITIALIZED;
+@@ -526,6 +647,10 @@ static int render_pip_sw(struct mpv_render_context *ctx, mpv_render_param *param
+     struct mp_image *intermediate = NULL;
+     if (status < 0)
+         goto done;
++    if (dovi) {
++        status = render_pip_dovi(ctx, &image, pixels, *stride, size[0], size[1], osd);
++        goto done;
++    }
+     int rotation = image.params.rotate;
+     if (rotation % 90) {
+         status = MPV_ERROR_UNSUPPORTED;
+@@ -614,7 +739,6 @@ static int render_pip_sw(struct mpv_render_context *ctx, mpv_render_param *param
+         }
+     }
+     // Mode 2: the host presents this frame with the source's HDR transfer.
+-    int pip_mode = GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_IOS_PIP_SW, int, 0);
+     enum pl_color_transfer trc = image.params.color.transfer;
+     if (osd && pip_mode == 2 &&
+         (trc == PL_COLOR_TRC_PQ || trc == PL_COLOR_TRC_HLG)) {
+@@ -668,7 +792,7 @@ int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
+         !GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_SKIP_RENDERING, int, 0);
+     bool pip_only = false;
+ #if HAVE_IOS_GL && HAVE_VULKAN
+-    bool pip_sw = GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_IOS_PIP_SW, int, 0);
++    int pip_sw = GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_IOS_PIP_SW, int, 0);
+     struct osd_state *pip_osd = ctx->vo ? ctx->vo->osd : NULL;
+     void **pip_output = get_mpv_render_param(params, MPV_RENDER_PARAM_IOS_PIP_FRAME, NULL);
+     if (pip_sw) {
+@@ -746,6 +870,11 @@ int mpv_render_context_render(mpv_render_context *ctx, mpv_render_param *params)
+     }
+ 
+     struct vo_frame *frame = ctx->next_frame;
++#if HAVE_IOS_GL && HAVE_VULKAN
++    // Mode 4 composes the displayed frame for an inline/PiP preview without
++    // consuming the next frame or advancing the video's presentation clock.
++    if (pip_sw == 4) frame = NULL;
++#endif
+     int64_t wait_present_count = ctx->present_count;
+     if (frame) {
+         ctx->next_frame = NULL;
+@@ -832,7 +961,7 @@ int mpv_render_context_get_info(mpv_render_context *ctx,
+     case MPV_RENDER_PARAM_IOS_PIP_SW:
+         if (param.data) {
+             // The highest composition mode this library accepts.
+-            *(int *)param.data = 2;
++            *(int *)param.data = 4;
+             res = 0;
+         } else {
+             res = MPV_ERROR_INVALID_PARAMETER;

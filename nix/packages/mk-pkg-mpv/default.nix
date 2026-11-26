@@ -77,6 +77,8 @@ let
       patch -p1 <${../../../patches/mpv-ios-render-recovery.patch}
       patch -p1 <${../../../patches/mpv-ios-software-upload-pressure.patch}
       patch -p1 <${../../../patches/mpv-ios-device-loss.patch}
+      patch -p1 <${../../../patches/mpv-dovi-source-spec.patch}
+      patch -p1 <${../../../patches/mpv-ios-dovi-pip-subtitles.patch}
     ''}
     if [ "${variant}" == "${variants.audio}" ]; then
       patch -p1 <${../../../patches/mpv-remove-libass.patch}

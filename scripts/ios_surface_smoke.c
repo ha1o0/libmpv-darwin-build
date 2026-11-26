@@ -158,7 +158,7 @@ int main(int argc, char **argv)
         goto done;
     int pip_supported = 0;
     if (mpv_render_context_get_info(render_context, (mpv_render_param) {
-            MPV_RENDER_PARAM_IOS_PIP_SW, &pip_supported }) < 0 || pip_supported != 2)
+            MPV_RENDER_PARAM_IOS_PIP_SW, &pip_supported }) < 0 || pip_supported < 2)
         goto done;
     mpv_render_context_set_update_callback(render_context, updated, &pending);
     if (mpv_command(mpv, (const char *[]) { "loadfile", argv[1], NULL }) < 0)
