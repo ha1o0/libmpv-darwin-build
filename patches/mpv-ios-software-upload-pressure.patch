@@ -1,0 +1,104 @@
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -23,6 +23,8 @@
+ #include "ta/ta_talloc.h"                  // for talloc_free, talloc_zero
+ #include "video/csputils.h"                // for mp_csp_params, mp_csp_equa...
+ #include "video/img_format.h"              // for mp_imgfmt
++#include "video/mp_image_pool.h"
++#include "video/sws_utils.h"
+ #include "video/mp_image.h"                // for mp_image, mp_image_params
+ #include "video/out/gpu/hwdec.h"           // for ra_hwdec_mapper
+ #include "video/out/gpu/video.h"           // for gl_video_conf/options
+@@ -93,6 +95,9 @@
+     uint64_t last_frame_id;// To avoid pushing duplicate frames into the queue.
+     double last_pts;       // Last presentation timestamp we rendered at, for redraws.
+     struct mp_image *overlay_src; // Last source frame of overlay-only renders.
++    struct mp_sws_context *sw_upload_scaler;
++    struct mp_image_pool *sw_upload_pool;
++    bool sw_upload_limited;
+ 
+     // Render State
+     struct mp_image_params current_params; // Current video parameters (resolution, colorspace, etc.).
+@@ -398,6 +403,45 @@
+  * @param frame The destination `pl_frame` to be populated with GPU texture info.
+  * @return True on success, false on failure.
+  */
++// Only a failed upload activates this fallback. Keep high-bit-depth YUV and
++// color/RPU side data for the ordinary GPU compositor; do not tag SDR as HDR.
++static struct mp_image *fit_software_upload(struct pl_video *p, struct mp_image *src)
++{
++#if HAVE_IOS_GL && HAVE_VULKAN && defined(PL_HAVE_VULKAN)
++    if (!p->ra_ctx || ra_pl_get(p->ra_ctx->ra) != p->ra->gpu ||
++        (int64_t)src->w * src->h <= 1920 * 1080 ||
++        !mp_sws_supported_format(src->imgfmt))
++        return NULL;
++    double scale = sqrt((1920.0 * 1080) / ((double)src->w * src->h));
++    int w = MPMAX(2, ((int)(src->w * scale)) & ~1);
++    int h = MPMAX(2, ((int)(src->h * scale)) & ~1);
++    if (!p->sw_upload_pool) p->sw_upload_pool = mp_image_pool_new(p);
++    if (!p->sw_upload_scaler) {
++        p->sw_upload_scaler = mp_sws_alloc(p);
++        p->sw_upload_scaler->log = p->log;
++        p->sw_upload_scaler->flags = mp_sws_fast_flags;
++        p->sw_upload_scaler->force_scaler = MP_SWS_SWS;
++    }
++    struct mp_image *dst = mp_image_pool_get(p->sw_upload_pool, src->imgfmt, w, h);
++    if (!dst) return NULL;
++    mp_image_copy_attributes(dst, src);
++    struct mp_rect crop = src->params.crop;
++    dst->params.crop = (struct mp_rect) {
++        .x0 = (int)((int64_t)crop.x0 * w / src->w),
++        .y0 = (int)((int64_t)crop.y0 * h / src->h),
++        .x1 = (int)((int64_t)crop.x1 * w / src->w),
++        .y1 = (int)((int64_t)crop.y1 * h / src->h),
++    };
++    if (mp_sws_scale(p->sw_upload_scaler, dst, src) < 0) {
++        talloc_free(dst);
++        return NULL;
++    }
++    return dst;
++#else
++    return NULL;
++#endif
++}
++
+ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src,
+                       struct pl_frame *frame)
+ {
+@@ -440,9 +484,24 @@
+             return false;
+         }
+     } else {
+-        if (!ra_upload_mp_image(p->ra, frame, mpi)) {
+-            talloc_free(mpi);
+-            return false;
++        struct mp_image *upload = p->sw_upload_limited ? fit_software_upload(p, mpi) : NULL;
++        if (!ra_upload_mp_image(p->ra, frame, upload ? upload : mpi)) {
++            if (!upload) upload = fit_software_upload(p, mpi);
++            if (!upload || !ra_upload_mp_image(p->ra, frame, upload)) {
++                talloc_free(upload);
++                talloc_free(mpi);
++                return false;
++            }
++            if (!p->sw_upload_limited)
++                mp_msg(p->log, MSGL_WARN, "GPU upload pressure: software frames limited to %dx%d.\n",
++                       upload->w, upload->h);
++            p->sw_upload_limited = true;
++        }
++        // GPU uploads are synchronous. Keep the original frame metadata and
++        // video geometry for subtitle layout; only the uploaded planes shrink.
++        if (upload) {
++            frame->crop = (struct pl_rect2df){0, 0, upload->w, upload->h};
++            talloc_free(upload);
+         }
+         apply_uploaded_frame_color(frame, &par);
+     }
+@@ -1160,6 +1219,8 @@
+     if (!params || !mp_image_params_static_equal(&p->current_params, params)) {
+         pl_video_reset(p);
+         ra_hwdec_mapper_free(&p->hwdec_mapper);
++        p->sw_upload_limited = false;
++        if (p->sw_upload_pool) mp_image_pool_clear(p->sw_upload_pool);
+     }
+     if (params)
+         p->current_params = *params;

@@ -1,0 +1,166 @@
+--- a/video/out/gpu_next/ra.h
++++ b/video/out/gpu_next/ra.h
+@@ -41,7 +41,7 @@
+ ra_queue ra_next_queue_create(struct ra_next *ra);
+ void ra_next_queue_destroy(ra_queue *queue);
+ void ra_next_queue_push(ra_queue queue, const struct pl_source_frame *frame);
+-void ra_next_queue_update(ra_queue queue, struct pl_frame_mix *mix, const struct pl_queue_params *params);
++bool ra_next_queue_update(ra_queue queue, struct pl_frame_mix *mix, const struct pl_queue_params *params);
+ void ra_next_queue_reset(ra_queue queue);
+ 
+ /* --- New Rendering Wrappers --- */
+--- a/video/out/gpu_next/ra.c
++++ b/video/out/gpu_next/ra.c
+@@ -51,9 +51,9 @@
+     pl_queue_push(queue, frame);
+ }
+ 
+-void ra_next_queue_update(ra_queue queue, struct pl_frame_mix *mix, const struct pl_queue_params *params)
+-{
+-    pl_queue_update(queue, mix, params);
++bool ra_next_queue_update(ra_queue queue, struct pl_frame_mix *mix, const struct pl_queue_params *params)
++{
++    return pl_queue_update(queue, mix, params) != PL_QUEUE_ERR;
+ }
+ 
+ void ra_next_queue_reset(ra_queue queue)
+@@ -347,8 +347,11 @@
+ void ra_pl_reset(struct ra_next *ra)
+ {
+     struct ra_priv *p = (struct ra_priv *)ra;
+-    if (p && p->renderer)
++    if (p && p->renderer) {
+         pl_renderer_flush_cache(p->renderer);
++        // A failed format/stream must not disable rendering of the next one.
++        pl_renderer_reset_errors(p->renderer, NULL);
++    }
+ }
+ 
+ /**
+--- a/video/out/gpu_next/video.h
++++ b/video/out/gpu_next/video.h
+@@ -31,14 +31,14 @@
+ /**
+  * Synchronously renders a video frame to a display target using libplacebo.
+  */
+-void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex,
++bool pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex,
+                      const struct pl_color_space *target_color);
+ 
+ /**
+  * Clears `target_tex` to transparent black and renders only OSD/subtitles
+  * (premultiplied sRGB) for `frame`. The video plane is not touched.
+  */
+-void pl_video_render_overlay(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex);
++bool pl_video_render_overlay(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex);
+ 
+ /**
+  * Synchronously renders `frame` into an sRGB temporary and returns a newly
+--- a/video/out/gpu_next/video.c
++++ b/video/out/gpu_next/video.c
+@@ -846,7 +846,7 @@
+  * @param frame The mpv frame to render, containing the current image.
+  * @param target_tex The destination GPU texture to render to.
+  */
+-void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex,
++bool pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex,
+                      const struct pl_color_space *target_color)
+ {
+     // Describe the target surface for libplacebo.
+@@ -887,7 +887,15 @@
+     struct pl_frame_mix queue_mix = {0};
+     struct pl_queue_params qparams = *pl_queue_params(.pts = target_pts);
+ 
+-    ra_next_queue_update(p->queue, &queue_mix, &qparams);
++    if (!ra_next_queue_update(p->queue, &queue_mix, &qparams)) {
++        mp_msg(p->log, MSGL_ERR, "Video frame upload failed; resetting the frame queue.\n");
++        pl_video_reset(p);
++        return false;
++    }
++    // An empty mix after a real input frame is not a successfully rendered
++    // black picture. Let the host preserve its last frame and recover.
++    if (frame && frame->current && queue_mix.num_frames == 0)
++        return false;
+ 
+     // To render OSD, we need a representative source frame to get color space info.
+     // The first frame in the mix is a perfect candidate.
+@@ -984,10 +992,13 @@
+     // Render the mix. libplacebo handles the empty mix case (no video) correctly.
+     if (!ra_next_render_image_mix(p->ra, &mix, &target_frame, &params)) {
+         mp_msg(p->log, MSGL_ERR, "Rendering failed.\n");
+-    }
+-}
+-
+-void pl_video_render_overlay(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex)
++        pl_video_reset(p);
++        return false;
++    }
++    return true;
++}
++
++bool pl_video_render_overlay(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex)
+ {
+     // Subtitle timing and the HDR/SDR tagging of image subtitles depend on
+     // the source frame. Keep it across redraws, which carry no image.
+@@ -1015,8 +1026,11 @@
+         .border = PL_CLEAR_COLOR,
+         .background_transparency = 1.0f,
+     );
+-    if (!ra_next_render_image(p->ra, NULL, &target_frame, &params))
++    if (!ra_next_render_image(p->ra, NULL, &target_frame, &params)) {
+         mp_msg(p->log, MSGL_ERR, "Overlay rendering failed.\n");
++        return false;
++    }
++    return true;
+ }
+ 
+  /**
+@@ -1141,6 +1155,12 @@
+  * @param params The new image parameters.
+  */
+ void pl_video_reconfig(struct pl_video *p, const struct mp_image_params *params) {
++    // Retire old software textures and hardware imports before switching
++    // dimensions/formats; their frames may have exhausted the iOS GPU budget.
++    if (!params || !mp_image_params_static_equal(&p->current_params, params)) {
++        pl_video_reset(p);
++        ra_hwdec_mapper_free(&p->hwdec_mapper);
++    }
+     if (params)
+         p->current_params = *params;
+ }
+@@ -1173,8 +1193,9 @@
+  */
+ void pl_video_reset(struct pl_video *p) {
+     if (!p || !p->ra) return;
++    pl_gpu_finish(p->ra->gpu);
++    ra_next_queue_reset(p->queue);
+     ra_pl_reset(p->ra);
+-    ra_next_queue_reset(p->queue); // Also reset the frame queue.
+     TA_FREEP(&p->overlay_src);
+     p->last_frame_id = 0;
+     p->last_pts = 0;
+--- a/video/out/gpu_next/libmpv_gpu_next.c
++++ b/video/out/gpu_next/libmpv_gpu_next.c
+@@ -150,10 +150,9 @@
+     // Render the video frame, or only its OSD/subtitles for a host that
+     // presents the decoded frame itself (iOS Dolby Vision pass-through).
+     bool overlay_only = GET_MPV_RENDER_PARAM(params, MPV_RENDER_PARAM_IOS_OVERLAY_ONLY, int, 0);
+-    if (overlay_only)
+-        pl_video_render_overlay(p->video_engine, frame, target_tex);
+-    else
+-        pl_video_render(p->video_engine, frame, target_tex, &p->context->target_color);
++    bool rendered = overlay_only
++        ? pl_video_render_overlay(p->video_engine, frame, target_tex)
++        : pl_video_render(p->video_engine, frame, target_tex, &p->context->target_color);
+ 
+     if (!p->context->fns->retains_wrapped_targets)
+         ra_next_tex_destroy(p->context->ra, &target_tex);
+@@ -161,7 +160,7 @@
+     if (p->context->fns->done_frame)
+         p->context->fns->done_frame(p->context);
+ 
+-    return 0;
++    return rendered ? 0 : MPV_ERROR_GENERIC;
+ }
+ 
+ /*

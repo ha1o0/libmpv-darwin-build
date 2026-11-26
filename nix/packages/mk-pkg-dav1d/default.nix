@@ -20,6 +20,9 @@ let
   };
 in
 
+# AV1 has no hardware decoder before the A17 Pro, so every older iPhone
+# depends on dav1d's NEON code: the C fallback is several times slower.
+# The x86_64 simulator would need nasm and is not a performance target.
 pkgs.stdenvNoCC.mkDerivation {
   name = "${pname}-${os}-${arch}-${version}";
   pname = pname;
@@ -38,7 +41,7 @@ pkgs.stdenvNoCC.mkDerivation {
       --cross-file ${crossFile} \
       --prefix=$out \
       -Dbitdepths="['8', '16']" \
-      -Denable_asm=false \
+      -Denable_asm=${if arch == "arm64" then "true" else "false"} \
       -Denable_tools=false \
       -Denable_examples=false \
       -Denable_tests=false \

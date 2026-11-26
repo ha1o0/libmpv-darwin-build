@@ -74,6 +74,9 @@ let
       patch -p1 <${../../../patches/mpv-iosurface-hdr-contract.patch}
       patch -p1 <${../../../patches/mpv-iosurface-hdr-packed.patch}
       patch -p1 <${../../../patches/mpv-ios-overlay-only.patch}
+      patch -p1 <${../../../patches/mpv-ios-render-recovery.patch}
+      patch -p1 <${../../../patches/mpv-ios-software-upload-pressure.patch}
+      patch -p1 <${../../../patches/mpv-ios-device-loss.patch}
     ''}
     if [ "${variant}" == "${variants.audio}" ]; then
       patch -p1 <${../../../patches/mpv-remove-libass.patch}
